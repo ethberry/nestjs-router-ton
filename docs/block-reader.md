@@ -7,7 +7,7 @@
 - `init()` (from `TonModule.onModuleInit`) starts a cron job (`cron` option). A run is skipped while the previous one is still going; an error of a run is logged and the next run starts from the same cursor.
 - `listen()` does nothing until the registry has an entry.
 - It reads the last masterchain block (`getMasterchainInfo`) and the range `fromSeqno .. min(last, fromSeqno + chunkSize − 1)`.
-- For each masterchain block: the block itself and the shard blocks it commits (`shards?seqno=`). A masterchain block names only the newest block of each shard; the earlier blocks of that shard since the last one read are taken by seqno. A shard seen for the first time (the first run after a start, a split or a merge) contributes only its newest block.
+- For each masterchain block: the block itself and the shard blocks it commits (`shards?seqno=`). A masterchain block names only the newest block of each shard; the earlier blocks of that shard since the last one read are taken by seqno. A shard seen for the first time (the first run after a start, a split or a merge) contributes only its newest block. The shard positions move only when the whole range is done, so a failed run reads the same shard blocks again.
 - Each block's transactions come from `getBlockTransactionsExt`, full (with the transaction BOC), in pages of 256; a page continues after the last transaction's logical time and account hash.
 - A shard block committed to the masterchain is final, so no confirmation depth is needed.
 - After the handlers of every event of the range have finished, the cursor moves: `fromSeqno` becomes `to + 1`, `getLastProcessedSeqno()` returns `to`, and the `block` event (`{ eventName: "block" }`, args `{ seqno: to }`) goes to its handlers. The app saves the cursor there and passes the saved seqno + 1 as `fromSeqno` on start. A crash re-reads the range in work.
@@ -26,7 +26,8 @@ TON has no logs: an "event" is the incoming internal message of a transaction. O
 
 - The registry (`updateRegistry({ contractType, contractAddress })`) maps watched addresses to a contract type; addresses may be raw or user-friendly and are stored raw, so all forms match.
 - The event goes to the handlers of `{ contractType, eventName }` for every contract type that watches the account. The second handler argument is the transaction as `getBlockTransactionsExt` returned it.
-- Handlers run one at a time, in chain order; a rejected handler is logged and does not stop the others.
+- A handler can register a new address while a range is processed (a deploy, a new user wallet). After a pass over the range and all its handlers, the range's blocks are read again for the addresses that appeared during it, until none appears; so the new address gets its messages of the whole range, earlier blocks included. A transaction has one account, so a later pass never delivers it again.
+- Handlers run one at a time, in chain order; a rejected handler is logged and does not stop the others or the cursor. A pattern without a handler is logged.
 
 ## Account existence and bounce
 
@@ -40,3 +41,5 @@ TON has no logs: an "event" is the incoming internal message of a transaction. O
   - a real jetton (the reference TEP-74 jetton in Tolk, code in `src/fixtures/jetton.ts`): deploy and mint, then a transfer with forward TON and a comment to a fresh address, which gets `TransferNotification` from its own jetton wallet;
   - a restart: a second reader started from the cursor of the first one's block event gets the transfer sent while it was down, and not the one already handled.
 - `src/ton.blocks.spec.ts` (stubbed API): several shard blocks between two masterchain blocks are all read, a new shard only from its newest block, and a block's second page continues after the first page's last transaction.
+- `src/ton.routing.spec.ts` (a fake chain: the API stubbed with transactions built by `src/fixtures/transactions.ts`): delivery, unwatched accounts, all address forms, several contract types, registry merge, an address registered by a handler mid-range, the block event and the cursor, an empty registry, a last block behind the cursor, `chunkSize`, a failing handler, a failed run that reads the same shard blocks again.
+- `src/utils/parse-message.spec.ts`: each event kind from a built transaction (empty body, comment, notification with inline and referenced payload, binary payload, excesses, other opcode, bounced message), no event for an external message and a bounced-back one, a Transfer for coins that stayed on an uninitialized account.
