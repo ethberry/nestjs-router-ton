@@ -16,7 +16,7 @@ Reads TON one masterchain block at a time, with its shard blocks, and hands the 
 ## Configuration
 
 - `TON_API_URL`: TON Center HTTP API v2; `TON_API_KEY`: its key, if any.
-- Module options (`ITonModuleOptions`): `fromSeqno` (the masterchain block to start from), `chunkSize` (masterchain blocks per run, default 100), `cron`, `debug`.
+- Module options (`ITonModuleOptions`): `fromSeqno` (the masterchain block to start from), `chunkSize` (masterchain blocks per run, default 20; also the most a failed run reads again), `cron`, `debug`. After a failed run the next cron ticks are skipped, doubling up to 63.
 
 ## Example
 
@@ -76,7 +76,7 @@ export class PaymentController {
   - a message bounced back to its sender gives no event to the receiver; the sender gets `Bounce`;
   - a transaction marked aborted but not bounced (a non-bounceable message, or a payment to an uninitialized wallet) kept the coins and gives `Transfer`;
   - an external message (the account's own send) gives nothing.
-- `TransferNotification` can be sent by anyone: accept it only when `from` equals `getJettonWalletAddress(master, merchant)` for a master you trust (cache it per master). A jetton transfer without `forward_ton_amount` sends no notification; it is seen only by watching the jetton wallet itself.
+- `TransferNotification` can be sent by anyone: accept it only when `from` equals `getJettonWalletAddress(master, merchant)` for a master you trust (the reader asks the master once per owner and keeps the answer). A jetton transfer without `forward_ton_amount` sends no notification; it is seen only by watching the jetton wallet itself.
 - The second handler argument is the transaction as `getBlockTransactionsExt` returned it (`data` is its BOC).
 - A throwing handler does not stop the reader; it makes the range repeat until it succeeds. Throw only for a failure that a retry can fix (the database is down), not for a payment you reject.
 - Save the cursor in the `block` handler: it runs only after every handler of the range succeeded.
