@@ -125,15 +125,28 @@ export class TonService {
     }
     const toSeqno = Math.min(last.seqno, fromSeqno + (this.options.chunkSize ?? 100) - 1);
 
+    // the shard positions move only when the whole range is done: a failed run reads the same shard blocks again
+    const shardSeqno = new Map(this.shardSeqno);
+    const blocks: IBlockId[] = [];
     for (let seqno = fromSeqno; seqno <= toSeqno; seqno++) {
-      for (const block of await this.blocksOf(seqno)) {
-        for (const tx of await this.transactionsOf(block)) {
-          this.route(tx);
-        }
-      }
+      blocks.push(...(await this.blocksOf(seqno, shardSeqno)));
     }
 
-    await this.drained();
+    // A handler can add to the registry while the range is processed (a deploy adds a new address): after a pass and all
+    // its handlers, the range is read again for the addresses that appeared during it, until none appears
+    const read = new Set<string>();
+    let pass = this.notRead(read);
+    while (pass.length) {
+      for (const block of blocks) {
+        for (const tx of await this.transactionsOf(block)) {
+          this.route(tx, pass);
+        }
+      }
+      await this.drained();
+      pass = this.notRead(read);
+    }
+
+    this.shardSeqno = shardSeqno;
     this.lastProcessedSeqno = toSeqno;
     this.options.fromSeqno = toSeqno + 1;
     await this.emitBlock(toSeqno);
@@ -218,16 +231,16 @@ export class TonService {
   // The masterchain block and every shard block it commits that was not read yet. A masterchain block names only the
   // newest block of each shard; the shard's earlier blocks since the last read one are taken by seqno. A shard seen
   // for the first time (the first run, a split or a merge) contributes only its newest block.
-  private async blocksOf(seqno: number): Promise<IBlockId[]> {
+  private async blocksOf(seqno: number, shardSeqno: Map<string, number>): Promise<IBlockId[]> {
     const { shards } = await this.api<{ shards: IBlockId[] }>("shards", { seqno });
     const blocks: IBlockId[] = [{ workchain: -1, shard: MASTERCHAIN_SHARD, seqno }];
     for (const shard of shards) {
       const key = `${shard.workchain}:${shard.shard}`;
-      const lastRead = this.shardSeqno.get(key);
+      const lastRead = shardSeqno.get(key);
       for (let n = lastRead === undefined ? shard.seqno : lastRead + 1; n <= shard.seqno; n++) {
         blocks.push({ ...shard, seqno: n });
       }
-      this.shardSeqno.set(key, shard.seqno);
+      shardSeqno.set(key, shard.seqno);
     }
     return blocks;
   }
@@ -254,11 +267,24 @@ export class TonService {
     }
   }
 
+  // the part of the registry this range has not read yet: per entry, its addresses not read; marks them read
+  private notRead(read: Set<string>): IContractOptions[] {
+    const pass: IContractOptions[] = [];
+    for (const entry of this.registry) {
+      const contractAddress = entry.contractAddress.filter(address => !read.has(`${entry.contractType} ${address}`));
+      contractAddress.forEach(address => read.add(`${entry.contractType} ${address}`));
+      if (contractAddress.length) {
+        pass.push({ ...entry, contractAddress });
+      }
+    }
+    return pass;
+  }
+
   // A transaction of a watched account goes, as the event of its incoming message, to the handlers of the account's
-  // contractType
-  private route(tx: ITonTransaction): void {
+  // contractType. A transaction has one account, so a later pass (only new addresses) never delivers it again.
+  private route(tx: ITonTransaction, registry: IContractOptions[]): void {
     const account = Address.parse(tx.address.account_address).toRawString();
-    const entries = this.registry.filter(entry => entry.contractAddress.includes(account));
+    const entries = registry.filter(entry => entry.contractAddress.includes(account));
     if (!entries.length) {
       return;
     }
