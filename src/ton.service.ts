@@ -49,7 +49,8 @@ interface IRoutedEvent {
 // masterchain blocks per run: about 1–2 minutes of chain, also the most a failed run reads again
 const DEFAULT_CHUNK_SIZE = 20;
 // the longest pause after failed runs, in cron ticks
-const MAX_SKIPPED_TICKS = 63;
+// (an API outage is retried at least every 16 ticks once it is over)
+const MAX_SKIPPED_TICKS = 15;
 
 // The key of a block. The API may give the shard and the numbers as strings or numbers (JSON of different
 // endpoints): they are normalised, or the same block would get two keys and a walk would never stop at it.
@@ -87,6 +88,10 @@ export class TonService {
   // count. A successful run resets it.
   public init(): void {
     this.job = new CronJob(this.options.cron, async () => {
+      // a run the app started itself is still going: not a run of this tick, it changes nothing
+      if (this.running) {
+        return;
+      }
       if (this.skippedTicks > 0) {
         this.skippedTicks--;
         return;

@@ -16,7 +16,7 @@ Reads TON one masterchain block at a time, with its shard blocks, and hands the 
 ## Configuration
 
 - `TON_API_URL`: TON Center HTTP API v2; `TON_API_KEY`: its key, if any.
-- Module options (`ITonModuleOptions`): `fromSeqno` (the masterchain block to start from), `chunkSize` (masterchain blocks per run, default 20; also the most a failed run reads again), `cron`, `debug`. After a failed run the next cron ticks are skipped, doubling up to 63.
+- Module options (`ITonModuleOptions`): `fromSeqno` (the masterchain block to start from), `chunkSize` (masterchain blocks per run, default 20; also the most a failed run reads again), `cron`, `debug`. After a failed run the next cron ticks are skipped, doubling up to 15.
 
 ## Example
 

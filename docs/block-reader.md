@@ -14,7 +14,7 @@
 
 `init()` (from `TonModule.onModuleInit`) registers a cron job (`tonListener_<id>` in `SchedulerRegistry`). A tick starts `listen()`.
 
-- After a failed run the next ticks are skipped, doubling: 1, 3, 7… up to 63 ticks. A handler that keeps failing on one event therefore does not re-read the range on every tick. Every failure is logged as an error with its count (`Run failed N time(s) in a row, next try in M tick(s): …`). A successful run resets the count.
+- After a failed run the next ticks are skipped, doubling: 1, 3, 7, up to 15 ticks, so after an API outage the reader tries again within 16 ticks. A tick that finds a run the app started itself still going does nothing and does not touch the count. A handler that keeps failing on one event therefore does not re-read the range on every tick. Every failure is logged as an error with its count (`Run failed N time(s) in a row, next try in M tick(s): …`). A successful run resets the count.
 - `listen()` runs one range at a time: a call while a run is going (a cron tick, or the app calling it) returns at once.
 
 1. Nothing happens while the registry is empty.
