@@ -1,15 +1,22 @@
 # @ethberry/nestjs-ton
 
-Reads TON block by block and hands the incoming messages of watched accounts to Nest controllers.
+Reads TON one masterchain block at a time, with its shard blocks, and hands the incoming messages of watched accounts to Nest controllers, the way `@ethberry/nestjs-viem` hands EVM logs.
 
 ## Peers
 
-`@nestjs/common`, `@nestjs/core`, `@nestjs/config`, `@nestjs/microservices`, `@nestjs/schedule`, `@ton/core`, `rxjs`.
+`@nestjs/common`, `@nestjs/core`, `@nestjs/config`, `@nestjs/microservices`, `@nestjs/schedule`, `cron`, `@ton/core`, `rxjs`.
+
+## Exports
+
+- `TonModule` (`register` / `registerAsync` with `ITonModuleOptions`), `TonService`.
+- `TonService`: `updateRegistry({ contractType, contractAddress })`, `getRegistry()`, `getLastProcessedSeqno()`, `getJettonWalletAddress(master, owner)`, `listen()` (one run; the cron calls it).
+- `TonEventType` (`Transfer`, `TransferNotification`, `Excesses`, `Bounce`, `Message`), `TonOpcode`, `BLOCK_EVENT`, `TON_API` (the API provider token), `parseMessage(boc)`.
+- Types: `ITonMessage`, `IBlockEvent`, `ILogEvent`, `IContractOptions`, `ITonTransaction`, `ITonModuleOptions`, `TonApi`.
 
 ## Configuration
 
-- `TON_API_URL`: TON Center HTTP API v2 (default `http://localhost:8082`); `TON_API_KEY`: its key, if any.
-- Module options (`ITonModuleOptions`): `fromSeqno` (the masterchain block to start from), `chunkSize` (masterchain blocks per run), `cron`, `debug`.
+- `TON_API_URL`: TON Center HTTP API v2; `TON_API_KEY`: its key, if any.
+- Module options (`ITonModuleOptions`): `fromSeqno` (the masterchain block to start from), `chunkSize` (masterchain blocks per run, default 100), `cron`, `debug`.
 
 ## Example
 
@@ -43,7 +50,17 @@ export class PaymentController {
     // event.args: { lt, hash, from, to, value, op, comment }
   }
 
-  // after every processed range: save the cursor
+  @EventPattern({ contractType: "MERCHANT", eventName: TonEventType.TRANSFER_NOTIFICATION })
+  public async jetton(@Payload() event: ILogEvent<ITonMessage>) {
+    // a real notification comes from the merchant's jetton wallet of a trusted master
+    const expected = await this.tonService.getJettonWalletAddress(usdtMaster, merchantAddress);
+    if (event.args.from !== expected) {
+      return; // spoofed
+    }
+    // event.args: { jettonAmount, sender, comment, ... }
+  }
+
+  // after every handler of the range succeeded: save the cursor
   @EventPattern({ eventName: BLOCK_EVENT })
   public block(@Payload() event: ILogEvent<IBlockEvent>) {
     return this.settings.update("TON_SEQNO", String(event.args.seqno));
@@ -53,13 +70,15 @@ export class PaymentController {
 
 ## Writing handlers
 
-- One event per incoming internal message of a watched account: `Transfer` (coins, with `comment` for op 0), `TransferNotification` (jettons: `jettonAmount`, `sender`, `comment` of the forward payload), `Excesses`, `Bounce`, `Message` (any other `op`). Addresses in args are raw (`0:…`); register in any form.
+- **Idempotent by `lt` and `hash`.** Delivery is at least once: a range whose handlers did not all succeed (a handler threw or rejected, the cursor save failed) is delivered again on the next run, and so is the range after a restart before the cursor was saved.
+- One event per incoming internal message of a watched account: `Transfer` (coins, with `comment` for op 0), `TransferNotification` (jettons: `jettonAmount`, `sender`, `comment` of the forward payload), `Excesses`, `Bounce`, `Message` (any other `op`, and any body that does not parse as its opcode says). Addresses in args are raw (`0:…`); register in any form.
 - A payment counts when its coins stayed on the account:
   - a message bounced back to its sender gives no event to the receiver; the sender gets `Bounce`;
   - a transaction marked aborted but not bounced (a non-bounceable message, or a payment to an uninitialized wallet) kept the coins and gives `Transfer`;
   - an external message (the account's own send) gives nothing.
-- `TransferNotification` can be sent by anyone: accept it only when `from` is the merchant's jetton wallet of a known jetton master (`get_wallet_address`). A jetton transfer without `forward_ton_amount` sends no notification; it is seen only by watching the jetton wallet itself.
-- The second handler argument is the transaction as `getBlockTransactionsExt` returned it (`data` is its BOC). A transaction is identified by `lt` and `hash`.
-- Save the cursor in the `block` handler: it runs after every handler of the range.
+- `TransferNotification` can be sent by anyone: accept it only when `from` equals `getJettonWalletAddress(master, merchant)` for a master you trust (cache it per master). A jetton transfer without `forward_ton_amount` sends no notification; it is seen only by watching the jetton wallet itself.
+- The second handler argument is the transaction as `getBlockTransactionsExt` returned it (`data` is its BOC).
+- A throwing handler does not stop the reader; it makes the range repeat until it succeeds. Throw only for a failure that a retry can fix (the database is down), not for a payment you reject.
+- Save the cursor in the `block` handler: it runs only after every handler of the range succeeded.
 
-How it works: [docs/block-reader.md](docs/block-reader.md).
+How it works, in full: [docs/block-reader.md](docs/block-reader.md).

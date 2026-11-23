@@ -16,6 +16,9 @@ How the package is built, what a published package contains, how a release is ma
 
 - Exact versions in `dependencies` / `devDependencies`; the lockfile is committed and installs use `npm ci`.
 - `@nestjs/*`, `rxjs` and `@ton/core` are peers (one `^` range from the tested devDependency version): they hold shared state or are installed by the consuming app.
+- `cron` is a peer too: the reader's `CronJob` goes into `@nestjs/schedule`'s `SchedulerRegistry`, which pins its own `cron`; a pinned copy here would be a second one once `@nestjs/schedule` moves.
+- `exports` lists `types` first, as TypeScript resolves the first matching condition.
+- `ton-api/Dockerfile` stays on Python 3.11: pydantic v1 of `ton-http-api` fails on 3.12 and later.
 
 ## Release
 
