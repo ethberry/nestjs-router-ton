@@ -1,0 +1,4 @@
+{
+  "stacks": ["typescript", "nestjs", "npm-workspaces", "jest"],
+  "targets": ["claude"]
+}

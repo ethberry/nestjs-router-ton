@@ -1,0 +1,83 @@
+{
+  "author": {
+    "email": "oleg@ethberry.io",
+    "name": "OlegGun",
+    "url": "https://ethberry.io/"
+  },
+  "bugs": {
+    "url": "https://github.com/ethberry/nestjs-ton/issues"
+  },
+  "description": "TON block reader for NestJS: routes incoming messages to controllers",
+  "devDependencies": {
+    "cron": "4.4.0",
+    "@ethberry/cross-env": "0.0.5",
+    "@ethberry/eslint-config": "5.0.13",
+    "@jest/globals": "30.5.2",
+    "@nestjs/common": "12.5.0",
+    "@nestjs/config": "12.1.1",
+    "@nestjs/core": "12.5.0",
+    "@nestjs/microservices": "12.5.0",
+    "@nestjs/schedule": "12.0.4",
+    "@nestjs/testing": "12.5.0",
+    "@ton/core": "0.63.1",
+    "@ton/crypto": "3.3.0",
+    "@types/jest": "30.0.0",
+    "@types/node": "24.19.2",
+    "husky": "9.1.7",
+    "jest": "30.5.2",
+    "jest-environment-node": "30.5.2",
+    "lint-staged": "17.6.0",
+    "prettier": "3.9.10",
+    "reflect-metadata": "0.2.2",
+    "rimraf": "6.1.4",
+    "rxjs": "7.8.2",
+    "ts-jest": "29.4.15",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "keywords": [],
+  "license": "UNLICENSED",
+  "main": "./dist/index.js",
+  "name": "@ethberry/nestjs-ton",
+  "type": "module",
+  "peerDependencies": {
+    "cron": "^4.4.0",
+    "@nestjs/common": "^12.5.0",
+    "@nestjs/config": "^12.1.1",
+    "@nestjs/core": "^12.5.0",
+    "@nestjs/microservices": "^12.5.0",
+    "@nestjs/schedule": "^12.0.4",
+    "@ton/core": "^0.63.1",
+    "rxjs": "^7.8.2"
+  },
+  "private": false,
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://npm.pkg.github.com/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ethberry/nestjs-ton.git"
+  },
+  "scripts": {
+    "build": "tsc",
+    "lint": "eslint . --fix",
+    "prebuild": "rimraf dist/",
+    "prepare": "husky",
+    "prettier": "prettier . --write",
+    "test": "npm run typecheck && cross-env NODE_OPTIONS=--experimental-vm-modules NODE_ENV=${NODE_ENV:=test} jest --detectOpenHandles --runInBand --forceExit",
+    "typecheck": "tsc -p tsconfig.test.json"
+  },
+  "title": "NestJS TON module",
+  "types": "./dist/index.d.ts",
+  "version": "0.0.0"
+}

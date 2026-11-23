@@ -1,0 +1,93 @@
+# Publishes with Node.js 24.x
+name: Manual release Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump (patch, minor or major)"
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: patch
+
+jobs:
+  user-publish:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Use Node.js 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24.x"
+
+      - name: Install Packages npm i
+        run: npm i
+
+      - name: Build Packages
+        run: npm run build
+
+      - name: Authenticate GitHub Packages & Configure Git User
+        run: |
+          echo "@ethberry:registry=https://npm.pkg.github.com/" >> .npmrc
+          echo "//npm.pkg.github.com/:_authToken=$GITHUBTOKEN" >> .npmrc
+          git update-index --assume-unchanged .npmrc
+          npx npm-cli-login -u $GITHUBUSER -p $GITHUBTOKEN -e $GITHUBEMAIL -r https://npm.pkg.github.com -s @ethberry --config-path="./"
+          git config --global user.name '@ethberry'
+          git config --global user.email $GITHUBEMAIL
+        env:
+          GITHUBTOKEN: ${{ secrets.GITHUBTOKEN }}
+          GITHUBUSER: ${{ secrets.GITHUBUSER }}
+          GITHUBEMAIL: ${{ secrets.GITHUBEMAIL }}
+
+      - name: Authenticate GitHub Packages via npm
+        run: npm whoami --registry=https://npm.pkg.github.com/
+
+      - name: Version by NPM
+
+        run: npm version "$BUMP" -m "[Manual release] [skip ci] %s"
+
+        env:
+
+          BUMP: ${{ inputs.bump }}
+
+      - name: Publish to GitHub Packages
+        uses: JS-DevTools/npm-publish@v4
+        with:
+          token: ${{ secrets.GITHUBTOKEN }}
+          registry: "https://npm.pkg.github.com"
+          ignore-scripts: true
+
+      - name: Authenticate NPM Registry & Configure Git User
+        run: |
+          echo "@ethberry:registry=https://registry.npmjs.org/" >> .npmrc
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" >> .npmrc
+          echo "//registry.npmjs.org/:username=${NPM_USER}" >> .npmrc
+          echo "//registry.npmjs.org/:email=${NPM_EMAIL}" >> .npmrc
+          git update-index --assume-unchanged .npmrc
+          git config --global user.name '@ethberry'
+          git config --global user.email $GITHUBEMAIL
+        env:
+          NPM_EMAIL: ${{ secrets.NPM_EMAIL }}
+          NPM_USER: ${{ secrets.NPM_USER }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Authenticate NPM Registry via npm
+        run: npm whoami --registry=https://registry.npmjs.org/
+
+      - name: Publish to NPM
+        uses: JS-DevTools/npm-publish@v4
+        with:
+          access: public
+          registry: "https://registry.npmjs.org"
+          token: ${{ secrets.NPM_TOKEN }}
+          ignore-scripts: true
+
+      - name: Git push
+        run: git push --no-verify && git push --tags --no-verify
+        env:
+          GITHUBTOKEN: ${{ secrets.GITHUBTOKEN }}

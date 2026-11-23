@@ -1,0 +1,17 @@
+/src
+/node_modules
+/coverage
+/docs
+/.github
+/AGENTS.md
+/CLAUDE.md
+/docker-compose.yml
+/jest.config.json
+/renovate.json
+/tsconfig.json
+/tsconfig.eslint.json
+/tsconfig.test.json
+/eslint.config.mjs
+.*
+**/*.spec.*
+/ton-api
