@@ -7,7 +7,7 @@ import { ConfigModule } from "@nestjs/config";
 import { Test } from "@nestjs/testing";
 import { EventPattern, Payload } from "@nestjs/microservices";
 import { CronExpression, SchedulerRegistry } from "@nestjs/schedule";
-import { Address, toNano } from "@ton/core";
+import { Address, beginCell, toNano } from "@ton/core";
 
 import { BLOCK_EVENT, TON_API, TonEventType } from "./ton.constants.js";
 import type { IBlockEvent, ILogEvent, ITonMessage } from "./interfaces/index.js";
@@ -21,6 +21,8 @@ const SENDER = new Address(0, Buffer.alloc(32, 1));
 const MERCHANT = new Address(0, Buffer.alloc(32, 2));
 const SHOP = new Address(0, Buffer.alloc(32, 3));
 const DEPLOYED = new Address(0, Buffer.alloc(32, 4));
+const JETTON_MASTER = new Address(0, Buffer.alloc(32, 5));
+const JETTON_WALLET = new Address(0, Buffer.alloc(32, 6));
 
 enum ContractType {
   MERCHANT = "MERCHANT",
@@ -40,10 +42,20 @@ function fakeChain(head: number, blocks: Record<string, ITonTransaction[]>, shar
   const transactions = jest.fn((params: Params) =>
     Promise.resolve({ incomplete: false, transactions: blocks[`${params.workchain}:${params.seqno}`] ?? [] }),
   );
+  const masterchainInfo = jest.fn(() => Promise.resolve({ last: { workchain: -1, shard: SHARD, seqno: head } }));
+  // every jetton master answers get_wallet_address with JETTON_WALLET
+  const getMethod = jest.fn(() =>
+    Promise.resolve({
+      exit_code: 0,
+      stack: [["cell", { bytes: beginCell().storeAddress(JETTON_WALLET).endCell().toBoc().toString("base64") }]],
+    }),
+  );
   const api = (method: string, params: Params = {}) => {
     switch (method) {
       case "getMasterchainInfo":
-        return Promise.resolve({ last: { workchain: -1, shard: SHARD, seqno: head } });
+        return masterchainInfo();
+      case "runGetMethod":
+        return getMethod();
       case "shards": {
         const top = shardTop[Number(params.seqno)];
         return Promise.resolve({ shards: top === undefined ? [] : [{ workchain: 0, shard: SHARD, seqno: top }] });
@@ -57,7 +69,7 @@ function fakeChain(head: number, blocks: Record<string, ITonTransaction[]>, shar
         return Promise.reject(new Error(method));
     }
   };
-  return { api, transactions };
+  return { api, transactions, masterchainInfo, getMethod };
 }
 
 @Injectable()
@@ -263,6 +275,8 @@ describe("TonService routing", function () {
       `DEPLOYED Transfer ${d} 15`,
       "block 3",
     ]);
+    // the second pass routes the transactions fetched by the first: each block is fetched once
+    expect(chain.transactions).toHaveBeenCalledTimes(3);
   });
 
   it("moves the cursor without a block handler", async function () {
@@ -361,6 +375,62 @@ describe("TonService routing", function () {
     expect(failed).toEqual("429 Too Many Requests");
     expect(deliveredAfterFailure).toEqual([]);
     expect(received.log).toEqual([`MERCHANT Transfer ${m} 10`, `MERCHANT Transfer ${m} 30`, "block 3"]);
+  });
+
+  it("runs one range at a time: a second call while a run is going returns at once", async function () {
+    const chain = fakeChain(3, { "-1:2": [payment(MERCHANT, 10n)] });
+    const { service, received } = await reader(chain, [RecordingController]);
+    service.updateRegistry({ contractType: ContractType.MERCHANT, contractAddress: [MERCHANT.toString()] });
+
+    await Promise.all([service.listen(), service.listen()]);
+
+    expect(chain.masterchainInfo).toHaveBeenCalledTimes(1);
+    expect(received.log).toEqual([`MERCHANT Transfer ${m} 10`, "block 3"]);
+  });
+
+  it("after failed runs skips the next ticks, doubling the pause, and logs every failure", async function () {
+    const chain = fakeChain(3, { "-1:2": [payment(MERCHANT, 10n)] });
+    const { service, error, module } = await reader(chain, [FailingController]);
+    service.updateRegistry({ contractType: ContractType.MERCHANT, contractAddress: [MERCHANT.toString()] });
+    service.init();
+    const job = [...module.get(SchedulerRegistry).getCronJobs().values()][0];
+    const runFailures = () => error.mock.calls.filter(([message]) => String(message).startsWith("Run failed"));
+    // a tick, and the number of failed runs to wait for after it
+    const tick = async (failuresAfter: number) => {
+      void job.fireOnTick();
+      while (runFailures().length < failuresAfter) {
+        await new Promise(resolve => setImmediate(resolve));
+      }
+    };
+
+    await tick(1); // run 1 fails: skip 1 tick
+    await tick(1); // skipped
+    await tick(2); // run 2 fails: skip 3 ticks
+    await tick(2);
+    await tick(2);
+    await tick(2); // skipped three times
+    await tick(3); // run 3
+
+    expect(chain.masterchainInfo).toHaveBeenCalledTimes(3);
+    expect(runFailures().map(([message]) => String(message).split(":")[0])).toEqual([
+      "Run failed 1 time(s) in a row, next try in 2 tick(s)",
+      "Run failed 2 time(s) in a row, next try in 4 tick(s)",
+      "Run failed 3 time(s) in a row, next try in 8 tick(s)",
+    ]);
+    service.destroy();
+  });
+
+  it("asks a jetton master for the wallet of an owner once, then keeps it", async function () {
+    const chain = fakeChain(3, {});
+    const { service } = await reader(chain, []);
+
+    const first = await service.getJettonWalletAddress(JETTON_MASTER.toString(), MERCHANT.toString());
+    // the same pair in other address forms
+    const second = await service.getJettonWalletAddress(JETTON_MASTER.toRawString(), MERCHANT.toRawString());
+
+    expect(first).toEqual(JETTON_WALLET.toRawString());
+    expect(second).toEqual(JETTON_WALLET.toRawString());
+    expect(chain.getMethod).toHaveBeenCalledTimes(1);
   });
 
   it("after destroy: the cron job is gone, a run stops before its next handler and keeps the cursor", async function () {

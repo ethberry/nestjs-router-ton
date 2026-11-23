@@ -46,7 +46,14 @@ interface IRoutedEvent {
   context: unknown;
 }
 
-const blockKey = (id: IBlockId) => `${id.workchain}:${id.shard}:${id.seqno}`;
+// masterchain blocks per run: about 1–2 minutes of chain, also the most a failed run reads again
+const DEFAULT_CHUNK_SIZE = 20;
+// the longest pause after failed runs, in cron ticks
+const MAX_SKIPPED_TICKS = 63;
+
+// The key of a block. The API may give the shard and the numbers as strings or numbers (JSON of different
+// endpoints): they are normalised, or the same block would get two keys and a walk would never stop at it.
+const blockKey = (id: IBlockId) => `${Number(id.workchain)}:${BigInt(id.shard)}:${Number(id.seqno)}`;
 
 @Injectable()
 export class TonService {
@@ -54,6 +61,11 @@ export class TonService {
   private job?: CronJob;
   private running = false;
   private destroyed = false;
+  // failed runs in a row, and the cron ticks still to skip after them
+  private failures = 0;
+  private skippedTicks = 0;
+  // jetton wallet per "master owner" (raw)
+  private jettonWallets = new Map<string, string>();
   private lastProcessedSeqno = -1;
   private registry: IContractOptions[] = [];
 
@@ -70,15 +82,28 @@ export class TonService {
     protected schedulerRegistry: SchedulerRegistry,
   ) {}
 
+  // A run per cron tick. After a failed run the next ones are skipped, doubling (1, 3, 7… up to MAX_SKIPPED_TICKS
+  // ticks), so a handler that keeps failing on one event does not hammer the API; every failure is logged with its
+  // count. A successful run resets it.
   public init(): void {
     this.job = new CronJob(this.options.cron, async () => {
-      // if the previous run is still going - skip
-      if (this.running) {
+      if (this.skippedTicks > 0) {
+        this.skippedTicks--;
         return;
       }
-      this.running = true;
-      await this.listen().catch(e => this.loggerService.error(e, `${TonService.name}-${this.instanceId}`));
-      this.running = false;
+      await this.listen().then(
+        () => {
+          this.failures = 0;
+        },
+        (e: unknown) => {
+          this.failures++;
+          this.skippedTicks = Math.min(2 ** this.failures - 1, MAX_SKIPPED_TICKS);
+          this.loggerService.error(
+            `Run failed ${this.failures} time(s) in a row, next try in ${this.skippedTicks + 1} tick(s): ${String(e)}`,
+            `${TonService.name}-${this.instanceId}`,
+          );
+        },
+      );
     });
     this.schedulerRegistry.addCronJob(`tonListener_${this.instanceId}`, this.job);
     this.job.start();
@@ -87,57 +112,70 @@ export class TonService {
   // Reads the next masterchain blocks up to the last one, with every shard block they commit, and hands the incoming
   // message of every transaction of a watched account to the handlers, one at a time in chain order. A shard block
   // committed to a masterchain block is final. The whole range is read before any handler runs, so an API error
-  // delivers nothing. The cursor moves only when every handler of the range succeeded; then the block event reports
-  // it. Otherwise the run throws and the next run reads the same range again: handlers must be idempotent (by lt and
-  // hash).
+  // delivers nothing. The first failing handler stops the run: it throws, the cursor stays, and the next run reads the
+  // same range again from its start, so the order holds and handlers must be idempotent (by lt and hash). Only one run
+  // at a time: a call while a run is going returns at once.
   public async listen(): Promise<void> {
-    if (!this.registry.length) {
+    if (this.running) {
       return;
     }
-
-    const { last } = await this.api<{ last: IBlockId }>("getMasterchainInfo");
-    const fromSeqno = this.options.fromSeqno;
-    if (fromSeqno > last.seqno) {
-      return;
-    }
-    const toSeqno = Math.min(last.seqno, fromSeqno + (this.options.chunkSize ?? 100) - 1);
-    const blocks = await this.blocksOf(fromSeqno, toSeqno);
-
-    // A handler can add to the registry while the range is processed (a deploy adds a new address): after a pass and all
-    // its handlers, the range is read again for the addresses that appeared during it, until none appears. A
-    // transaction has one account, so a later pass (only new addresses) never delivers it again.
-    const read = new Set<string>();
-    let failed = false;
-    let pass = this.notRead(read);
-    while (pass.length) {
-      const events: IRoutedEvent[] = [];
-      for (const block of blocks) {
-        for (const tx of await this.transactionsOf(block)) {
-          events.push(...this.route(tx, pass));
-        }
+    this.running = true;
+    try {
+      if (!this.registry.length) {
+        return;
       }
-      for (const event of events) {
-        if (this.destroyed) {
-          return;
-        }
-        failed = !(await this.call(event)) || failed;
-      }
-      pass = this.notRead(read);
-    }
 
-    if (failed) {
-      throw new Error(`A handler failed in blocks ${fromSeqno}..${toSeqno}: the range is read again on the next run`);
+      const { last } = await this.api<{ last: IBlockId }>("getMasterchainInfo");
+      const fromSeqno = this.options.fromSeqno;
+      if (fromSeqno > last.seqno) {
+        return;
+      }
+      const toSeqno = Math.min(last.seqno, fromSeqno + (this.options.chunkSize ?? DEFAULT_CHUNK_SIZE) - 1);
+      const blocks = await this.blocksOf(fromSeqno, toSeqno);
+
+      // A handler can add to the registry while the range is processed (a deploy adds a new address): after a pass and all
+      // its handlers, the range is read again for the addresses that appeared during it, until none appears. The blocks'
+      // transactions are fetched once per run. A transaction has one account, so a later pass (only new addresses) never
+      // delivers it again.
+      const transactions = new Map<string, ITonTransaction[]>();
+      const read = new Set<string>();
+      let pass = this.notRead(read);
+      while (pass.length) {
+        const events: IRoutedEvent[] = [];
+        for (const block of blocks) {
+          const key = blockKey(block);
+          const txs = transactions.get(key) ?? (await this.transactionsOf(block));
+          transactions.set(key, txs);
+          for (const tx of txs) {
+            events.push(...this.route(tx, pass));
+          }
+        }
+        for (const event of events) {
+          if (this.destroyed) {
+            return;
+          }
+          if (!(await this.call(event))) {
+            throw new Error(
+              `A handler failed in blocks ${fromSeqno}..${toSeqno}: the range is read again on the next run`,
+            );
+          }
+        }
+        pass = this.notRead(read);
+      }
+
+      if (this.destroyed) {
+        return;
+      }
+      const args: IBlockEvent = { seqno: toSeqno };
+      const blockEvent = { pattern: blockPattern, description: { name: BLOCK_EVENT, args }, context: args };
+      if (this.hasHandler(blockPattern) && !(await this.call(blockEvent))) {
+        throw new Error(`The block handler failed for block ${toSeqno}: the range is read again on the next run`);
+      }
+      this.lastProcessedSeqno = toSeqno;
+      this.options.fromSeqno = toSeqno + 1;
+    } finally {
+      this.running = false;
     }
-    if (this.destroyed) {
-      return;
-    }
-    const args: IBlockEvent = { seqno: toSeqno };
-    const blockEvent = { pattern: blockPattern, description: { name: BLOCK_EVENT, args }, context: args };
-    if (this.hasHandler(blockPattern) && !(await this.call(blockEvent))) {
-      throw new Error(`The block handler failed for block ${toSeqno}: the range is read again on the next run`);
-    }
-    this.lastProcessedSeqno = toSeqno;
-    this.options.fromSeqno = toSeqno + 1;
   }
 
   // Addresses are stored and matched in raw form ("0:…")
@@ -167,8 +205,14 @@ export class TonService {
   }
 
   // The jetton wallet of `owner` for the jetton `master` (raw form), from the master's get_wallet_address. A
-  // TransferNotification is real only when its `from` is this address for a master the app trusts.
+  // TransferNotification is real only when its `from` is this address for a master the app trusts. The address never
+  // changes for a (master, owner) pair, so it is asked once and kept.
   public async getJettonWalletAddress(master: string, owner: string): Promise<string> {
+    const key = `${Address.parse(master).toRawString()} ${Address.parse(owner).toRawString()}`;
+    const known = this.jettonWallets.get(key);
+    if (known) {
+      return known;
+    }
     const ownerSlice = beginCell().storeAddress(Address.parse(owner)).endCell().toBoc().toString("base64");
     const { exit_code, stack } = await this.api<{ exit_code: number; stack: Array<[string, { bytes: string }]> }>(
       "runGetMethod",
@@ -178,7 +222,9 @@ export class TonService {
     if (exit_code !== 0) {
       throw new Error(`get_wallet_address of ${master} failed with exit code ${exit_code}`);
     }
-    return Cell.fromBase64(stack[0][1].bytes).beginParse().loadAddress().toRawString();
+    const wallet = Cell.fromBase64(stack[0][1].bytes).beginParse().loadAddress().toRawString();
+    this.jettonWallets.set(key, wallet);
+    return wallet;
   }
 
   // Stops the cron job; a run in progress stops before its next handler and does not move the cursor
@@ -246,33 +292,39 @@ export class TonService {
   // only the newest block of each shard; the shard blocks before it are found through their prev_blocks, back to the
   // blocks the previous masterchain block named. This holds after a restart and across shard splits and merges.
   private async blocksOf(fromSeqno: number, toSeqno: number): Promise<IBlockId[]> {
-    let committed = fromSeqno > 1 ? await this.shardTops(fromSeqno - 1) : new Set<string>();
+    let committed = fromSeqno > 1 ? await this.shardTops(fromSeqno - 1) : [];
     const blocks: IBlockId[] = [];
     for (let seqno = fromSeqno; seqno <= toSeqno; seqno++) {
       blocks.push({ workchain: -1, shard: MASTERCHAIN_SHARD, seqno });
-      const { shards } = await this.api<{ shards: IBlockId[] }>("shards", { seqno });
-      for (const top of shards) {
-        blocks.push(...(await this.shardBlocksSince(top, committed)));
-      }
-      committed = new Set(shards.map(blockKey));
+      const shards = await this.shardTops(seqno);
+      blocks.push(...(await this.shardBlocksSince(shards, committed)));
+      committed = shards;
     }
     return blocks;
   }
 
-  private async shardTops(seqno: number): Promise<Set<string>> {
+  private async shardTops(seqno: number): Promise<IBlockId[]> {
     const { shards } = await this.api<{ shards: IBlockId[] }>("shards", { seqno });
-    return new Set(shards.map(blockKey));
+    return shards;
   }
 
-  // `top` and the shard blocks before it that are not in `committed` (named by the previous masterchain block), oldest
-  // first. After a merge a block has two prev blocks; after a split two blocks share one.
-  private async shardBlocksSince(top: IBlockId, committed: Set<string>): Promise<IBlockId[]> {
+  // The shard blocks a masterchain block commits: its `tops` and the blocks before them that the previous masterchain
+  // block did not commit, oldest first. One walk for all tops: after a split both new shards lead back to their parent
+  // block, which is taken once; after a merge a block has two prev blocks. The walk stops at a committed block, and
+  // below the lowest committed seqno of the workchain (seqnos only grow along a shard's chain).
+  private async shardBlocksSince(tops: IBlockId[], committed: IBlockId[]): Promise<IBlockId[]> {
+    const committedKeys = new Set(committed.map(blockKey));
+    const floor = new Map<number, number>();
+    for (const id of committed) {
+      floor.set(Number(id.workchain), Math.min(floor.get(Number(id.workchain)) ?? Infinity, Number(id.seqno)));
+    }
     const found = new Map<string, IBlockId>();
-    const queue = [top];
+    const queue = [...tops];
     while (queue.length) {
       const id = queue.pop()!;
       const key = blockKey(id);
-      if (committed.has(key) || found.has(key) || id.seqno <= 0) {
+      const seqno = Number(id.seqno);
+      if (committedKeys.has(key) || found.has(key) || seqno <= 0 || seqno < (floor.get(Number(id.workchain)) ?? 0)) {
         continue;
       }
       found.set(key, id);
@@ -283,7 +335,10 @@ export class TonService {
       });
       queue.push(...prev_blocks);
     }
-    return [...found.values()].sort((a, b) => a.seqno - b.seqno);
+    // oldest first; blocks of one seqno (sibling shards) by shard, so the order is the same on every run
+    return [...found.values()].sort(
+      (a, b) => Number(a.seqno) - Number(b.seqno) || (BigInt(a.shard) < BigInt(b.shard) ? -1 : 1),
+    );
   }
 
   // All transactions of a block, page by page; a page continues after the (lt, account) of the previous page's last

@@ -31,7 +31,11 @@ const key = (block: IBlockId) => `${block.shard}:${block.seqno}`;
 
 // TON Center v2 of a chain whose last masterchain block is 11. `tops`: the shard blocks each masterchain block names;
 // `prev`: the prev blocks of each shard block ("<shard>:<seqno>"); block 0:ALL:21 has two pages of transactions.
-function fakeApi(tops: Record<number, IBlockId[]>, prev: Record<string, IBlockId[]>) {
+// prev blocks are JSON as an API may send it: the shard as a string or as a number
+function fakeApi(
+  tops: Record<number, IBlockId[]>,
+  prev: Record<string, Array<{ workchain: number; shard: string | number; seqno: number }>>,
+) {
   const read: Params[] = [];
   const api = (method: string, params: Params = {}) => {
     switch (method) {
@@ -111,6 +115,35 @@ describe("TonService block walk", function () {
     const read = await readFrom11(chain);
 
     expect(read).toEqual(["-1 all 11", "0 left 21", "0 right 21"]);
+  });
+
+  it("after a split of a parent that moved on reads the parent's new block once, then both new shards", async function () {
+    // block 10 named all 20; the shard made all 21 and then split: both halves lead back to all 21
+    const chain = fakeApi(
+      { 10: [id(ALL, 20)], 11: [id(LEFT, 22), id(RIGHT, 22)] },
+      {
+        [key(id(LEFT, 22))]: [id(ALL, 21)],
+        [key(id(RIGHT, 22))]: [id(ALL, 21)],
+        [key(id(ALL, 21))]: [id(ALL, 20)],
+      },
+    );
+
+    const read = await readFrom11(chain);
+
+    // all 21 has two pages of transactions in this fake chain
+    expect(read).toEqual(["-1 all 11", "0 all 21", `0 all 21 ${FIRST_PAGE_LT}`, "0 left 22", "0 right 22"]);
+  });
+
+  it("stops at the committed block also when the API gives its shard as a JSON number", async function () {
+    // the header names the committed block with the shard as a number (-2^63 is exact in a double)
+    const chain = fakeApi(
+      { 10: [id(ALL, 20)], 11: [id(ALL, 21)] },
+      { [key(id(ALL, 21))]: [{ workchain: 0, shard: -(2 ** 63), seqno: 20 }] },
+    );
+
+    const read = await readFrom11(chain);
+
+    expect(read).toEqual(["-1 all 11", "0 all 21", `0 all 21 ${FIRST_PAGE_LT}`]);
   });
 
   it("after a merge reads the merged block and the blocks of both halves before it", async function () {
