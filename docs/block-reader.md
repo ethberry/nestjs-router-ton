@@ -35,4 +35,8 @@ TON has no logs: an "event" is the incoming internal message of a transaction. O
 
 ## Tests
 
-`src/ton.service.spec.ts` runs against the network of `docker-compose.yml`: one external message of the main wallet with a non-bounceable transfer with a comment, a `transfer_notification` with a comment, and a bounceable transfer to an uninitialized address. It checks the `Transfer`, `TransferNotification` and `Bounce` events, and that the uninitialized address of the bounced transfer gets none.
+- `src/ton.service.spec.ts`, against the network of `docker-compose.yml` (MyLocalTon's main wallet sends):
+  - one external message with a non-bounceable transfer with a comment, a hand-made `transfer_notification`, a message with an unknown opcode and a bounceable transfer to an uninitialized address: `Transfer`, `TransferNotification`, `Message` and `Bounce`, and no event for the address of the bounced transfer; the watched addresses are given in user-friendly and raw form;
+  - a real jetton (the reference TEP-74 jetton in Tolk, code in `src/fixtures/jetton.ts`): deploy and mint, then a transfer with forward TON and a comment to a fresh address, which gets `TransferNotification` from its own jetton wallet;
+  - a restart: a second reader started from the cursor of the first one's block event gets the transfer sent while it was down, and not the one already handled.
+- `src/ton.blocks.spec.ts` (stubbed API): several shard blocks between two masterchain blocks are all read, a new shard only from its newest block, and a block's second page continues after the first page's last transaction.

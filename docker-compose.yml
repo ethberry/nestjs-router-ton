@@ -1,20 +1,20 @@
-# The local TON network of the tests. Container names and ports are the same as in other EthBerry stands: run one at a
-# time.
+# The local TON network of the tests. Its own names, ports and subnet: it runs next to other EthBerry stands.
 services:
-  # The genesis validator of MyLocalTon (github.com/neodix42/mylocalton-docker), lite-server on 40004. Its
-  # global.config.json names the node by its address in the `ton` network, so both services keep fixed addresses.
-  ton:
-    container_name: ton
+  # The genesis validator of MyLocalTon (github.com/neodix42/mylocalton-docker). Its global.config.json names the node by
+  # its address in the network below, so both services keep fixed addresses.
+  ton-node:
+    container_name: nestjs-ton-node
     image: ghcr.io/neodix42/mylocalton-docker:v4.3.0
     restart: "on-failure"
     environment:
       GENESIS: "true"
       NAME: genesis
+      # TVM version of the new network (default 11): Jetton 2.0 compiled by Tolk uses TVM 12 instructions
+      # (LDSTDADDR, STSTDADDR) and fails with exit code 6 (invalid opcode) on 11
+      VERSION_CAPABILITIES: "12"
     volumes:
       - ton-shared:/usr/share/data
       - ton-db:/var/ton-work/db
-    ports:
-      - "40004:40004" # lite-server
     healthcheck:
       test: /usr/local/bin/lite-client -a 127.0.0.1:40004 -p /var/ton-work/db/liteserver.pub -t 3 -c last
       interval: 10s
@@ -26,24 +26,24 @@ services:
           cpus: "1.0" # as upstream MyLocalTon
     networks:
       ton:
-        ipv4_address: 172.28.1.10
+        ipv4_address: 172.29.1.10
 
   # TON Center HTTP API v2 over the lite-server (TON_API_URL), built by ton-api/Dockerfile
   ton-api:
-    container_name: ton-api
+    container_name: nestjs-ton-api
     build: ./ton-api
     image: ethberry/ton-http-api-local:2.0.68
     restart: "on-failure"
     volumes:
       - ton-shared:/usr/share/data:ro
     ports:
-      - "8082:8081"
+      - "8182:8081"
     depends_on:
-      ton:
+      ton-node:
         condition: service_healthy
     networks:
       ton:
-        ipv4_address: 172.28.1.105
+        ipv4_address: 172.29.1.105
 
 volumes:
   ton-shared:
@@ -53,4 +53,4 @@ networks:
   ton:
     ipam:
       config:
-        - subnet: 172.28.1.0/24
+        - subnet: 172.29.1.0/24

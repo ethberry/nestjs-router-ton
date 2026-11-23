@@ -1,7 +1,5 @@
 import { CronExpression } from "@nestjs/schedule";
 
-import { TonEventType } from "../ton.constants.js";
-
 export interface ITonModuleOptions {
   // the first masterchain block to read; the app keeps the last processed one (the block event) and passes the next
   fromSeqno: number;
@@ -18,8 +16,9 @@ export interface IContractOptions {
   contractAddress: string[];
 }
 
+// `name` is a TonEventType, or "block" for the block event
 export interface ILogEvent<T = any> {
-  name: TonEventType | string;
+  name: string;
   args: T;
 }
 

@@ -11,17 +11,18 @@ Level 1: no dependencies on other `@ethberry/*` runtime packages.
 - Base branch: `main`.
 - Install: `npm ci` (the lockfile is committed).
 - Build: `npm run build` (`tsc`). Lint: `npm run lint`. Typecheck: `npm run typecheck`.
-- Test: `npm run test`. It needs the local network: `docker compose up -d --build --wait` (`ton` = MyLocalTon, healthy about a minute after first start; `ton-api` = TON Center v2 on 8082, built from `ton-api/Dockerfile`).
+- Test: `npm run test`. It needs the local network: `docker compose up -d --build --wait` (`nestjs-ton-node` = MyLocalTon, healthy one to two minutes after first start; `nestjs-ton-api` = TON Center v2 on 8182, built from `ton-api/Dockerfile`).
 - CI (`ci-test.yml`): by hand only; starts the network, then install, lint, build, test.
 
 ## Gotchas
 
 - ESM only (`nodenext`, `.js` in relative imports). Jest runs with `NODE_OPTIONS=--experimental-vm-modules`.
 - `@ton/core` and `@nestjs/*` are peers: one copy per app.
-- The tests send from MyLocalTon's `main-wallet` (wallet v3, id 42, masterchain); its key is read from the `ton` container (`docker exec`, `TON_CONTAINER`). A recreated `ton` volume is a new network with a new wallet.
+- The tests send from MyLocalTon's `main-wallet` (wallet v3, id 42, masterchain); its key is read from the node container (`docker exec`, `TON_CONTAINER`). Recreated volumes are a new network with a new wallet.
+- The network is created with TVM version 12 (`VERSION_CAPABILITIES`, MyLocalTon's default is 11): the test jetton (Jetton 2.0 compiled by Tolk) uses TVM 12 instructions and fails with exit code 6 on 11. The setting acts only at genesis, on empty volumes.
 - The C++ TON Center images (v2 and the v3 indexer) die with SIGILL on Apple silicon; `ton-api` is the Python `ton-http-api`.
 - The chain test waits for real blocks: `testTimeout` in `jest.config.json` is raised for it (the testing rule's exception for chain tests).
-- Container names `ton`, `ton-api` and their ports are the same as in other EthBerry stands: one stand at a time; never `docker rm`, use `docker stop` / `docker start`.
+- The containers, the API port and the subnet (`172.29.1.0/24`) are this repository's own, so the network runs next to other EthBerry stands. Never `docker rm`; use `docker stop` / `docker start`.
 
 ## Docs
 

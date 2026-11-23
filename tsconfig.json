@@ -39,6 +39,7 @@
     "**/test-globals.d.ts",
     "**/jest.setup.ts",
     "**/setup-jest.ts",
-    "**/__mocks__/**"
+    "**/__mocks__/**",
+    "**/fixtures/**"
   ]
 }
