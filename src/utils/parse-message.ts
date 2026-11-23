@@ -45,6 +45,16 @@ export function parseMessage(boc: string): ILogEvent<ITonMessage> | null {
     return { name: TonEventType.BOUNCE, args };
   }
 
+  // anyone can send any body: one that does not parse as its opcode says (a cut comment, a notification without its
+  // fields) is a Message with that opcode, never an error that would stop the reader
+  try {
+    return readBody(args, body);
+  } catch {
+    return { name: TonEventType.MESSAGE, args };
+  }
+}
+
+function readBody(args: ITonMessage, body: Slice): ILogEvent<ITonMessage> {
   switch (args.op) {
     case undefined:
       return { name: TonEventType.TRANSFER, args };

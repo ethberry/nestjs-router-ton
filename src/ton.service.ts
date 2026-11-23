@@ -5,10 +5,8 @@ import { MessageHandler } from "@nestjs/microservices";
 import { transformPatternToRoute } from "@nestjs/microservices/utils/index.js";
 import { PATTERN_METADATA } from "@nestjs/microservices/constants";
 import { SchedulerRegistry } from "@nestjs/schedule";
-import { Address } from "@ton/core";
+import { Address, beginCell, Cell } from "@ton/core";
 import { CronJob } from "cron";
-import { EMPTY, from, Observable, Subject } from "rxjs";
-import { finalize, mergeAll, mergeMap } from "rxjs/operators";
 
 import type { TonApi } from "./providers/api.js";
 import { parseMessage } from "./utils/parse-message.js";
@@ -48,18 +46,16 @@ interface IRoutedEvent {
   context: unknown;
 }
 
+const blockKey = (id: IBlockId) => `${id.workchain}:${id.shard}:${id.seqno}`;
+
 @Injectable()
 export class TonService {
-  private instanceId: string;
-  private cronLock = false;
+  private instanceId = (Math.random() + 1).toString(36).substring(7);
+  private job?: CronJob;
+  private running = false;
+  private destroyed = false;
   private lastProcessedSeqno = -1;
   private registry: IContractOptions[] = [];
-  // the last shard block read, per shard ("workchain:shard")
-  private shardSeqno = new Map<string, number>();
-  private subject = new Subject<IRoutedEvent>();
-  // events emitted whose handlers have not finished, and who waits for that number to reach 0
-  private pending = 0;
-  private drainWaiters: Array<() => void> = [];
 
   constructor(
     @Inject(Logger)
@@ -72,47 +68,28 @@ export class TonService {
     @Inject(MODULE_OPTIONS_TOKEN)
     protected options: ITonModuleOptions,
     protected schedulerRegistry: SchedulerRegistry,
-  ) {
-    // handlers run one at a time, in the order of the chain
-    this.subject
-      .pipe(
-        mergeMap(
-          ({ pattern, description, context }) =>
-            from(this.call(pattern, description, context)).pipe(
-              mergeAll(),
-              finalize(() => this.settle()),
-            ),
-          1,
-        ),
-      )
-      .subscribe({
-        next: v => {
-          loggerService.log(v, `${TonService.name}-${this.instanceId}`);
-        },
-        error: e => {
-          loggerService.error(e);
-        },
-      });
-  }
+  ) {}
 
   public init(): void {
-    this.instanceId = (Math.random() + 1).toString(36).substring(7);
-    const job = new CronJob(this.options.cron, async () => {
+    this.job = new CronJob(this.options.cron, async () => {
       // if the previous run is still going - skip
-      if (this.cronLock) {
+      if (this.running) {
         return;
       }
-      this.cronLock = true;
+      this.running = true;
       await this.listen().catch(e => this.loggerService.error(e, `${TonService.name}-${this.instanceId}`));
-      this.cronLock = false;
+      this.running = false;
     });
-    this.schedulerRegistry.addCronJob(`tonListener_${this.instanceId}`, job);
-    job.start();
+    this.schedulerRegistry.addCronJob(`tonListener_${this.instanceId}`, this.job);
+    this.job.start();
   }
 
-  // Reads the next masterchain blocks up to the last one, with the shard blocks they commit, and hands the incoming
-  // message of every transaction of a watched account to the handlers. A shard block committed to a masterchain block
-  // is final. The cursor moves only after all handlers have finished; then the block event reports it.
+  // Reads the next masterchain blocks up to the last one, with every shard block they commit, and hands the incoming
+  // message of every transaction of a watched account to the handlers, one at a time in chain order. A shard block
+  // committed to a masterchain block is final. The whole range is read before any handler runs, so an API error
+  // delivers nothing. The cursor moves only when every handler of the range succeeded; then the block event reports
+  // it. Otherwise the run throws and the next run reads the same range again: handlers must be idempotent (by lt and
+  // hash).
   public async listen(): Promise<void> {
     if (!this.registry.length) {
       return;
@@ -124,32 +101,43 @@ export class TonService {
       return;
     }
     const toSeqno = Math.min(last.seqno, fromSeqno + (this.options.chunkSize ?? 100) - 1);
-
-    // the shard positions move only when the whole range is done: a failed run reads the same shard blocks again
-    const shardSeqno = new Map(this.shardSeqno);
-    const blocks: IBlockId[] = [];
-    for (let seqno = fromSeqno; seqno <= toSeqno; seqno++) {
-      blocks.push(...(await this.blocksOf(seqno, shardSeqno)));
-    }
+    const blocks = await this.blocksOf(fromSeqno, toSeqno);
 
     // A handler can add to the registry while the range is processed (a deploy adds a new address): after a pass and all
-    // its handlers, the range is read again for the addresses that appeared during it, until none appears
+    // its handlers, the range is read again for the addresses that appeared during it, until none appears. A
+    // transaction has one account, so a later pass (only new addresses) never delivers it again.
     const read = new Set<string>();
+    let failed = false;
     let pass = this.notRead(read);
     while (pass.length) {
+      const events: IRoutedEvent[] = [];
       for (const block of blocks) {
         for (const tx of await this.transactionsOf(block)) {
-          this.route(tx, pass);
+          events.push(...this.route(tx, pass));
         }
       }
-      await this.drained();
+      for (const event of events) {
+        if (this.destroyed) {
+          return;
+        }
+        failed = !(await this.call(event)) || failed;
+      }
       pass = this.notRead(read);
     }
 
-    this.shardSeqno = shardSeqno;
+    if (failed) {
+      throw new Error(`A handler failed in blocks ${fromSeqno}..${toSeqno}: the range is read again on the next run`);
+    }
+    if (this.destroyed) {
+      return;
+    }
+    const args: IBlockEvent = { seqno: toSeqno };
+    const blockEvent = { pattern: blockPattern, description: { name: BLOCK_EVENT, args }, context: args };
+    if (this.hasHandler(blockPattern) && !(await this.call(blockEvent))) {
+      throw new Error(`The block handler failed for block ${toSeqno}: the range is read again on the next run`);
+    }
     this.lastProcessedSeqno = toSeqno;
     this.options.fromSeqno = toSeqno + 1;
-    await this.emitBlock(toSeqno);
   }
 
   // Addresses are stored and matched in raw form ("0:…")
@@ -178,8 +166,28 @@ export class TonService {
     return this.lastProcessedSeqno;
   }
 
+  // The jetton wallet of `owner` for the jetton `master` (raw form), from the master's get_wallet_address. A
+  // TransferNotification is real only when its `from` is this address for a master the app trusts.
+  public async getJettonWalletAddress(master: string, owner: string): Promise<string> {
+    const ownerSlice = beginCell().storeAddress(Address.parse(owner)).endCell().toBoc().toString("base64");
+    const { exit_code, stack } = await this.api<{ exit_code: number; stack: Array<[string, { bytes: string }]> }>(
+      "runGetMethod",
+      {},
+      { address: Address.parse(master).toString(), method: "get_wallet_address", stack: [["tvm.Slice", ownerSlice]] },
+    );
+    if (exit_code !== 0) {
+      throw new Error(`get_wallet_address of ${master} failed with exit code ${exit_code}`);
+    }
+    return Cell.fromBase64(stack[0][1].bytes).beginParse().loadAddress().toRawString();
+  }
+
+  // Stops the cron job; a run in progress stops before its next handler and does not move the cursor
   public destroy(): void {
-    this.subject.complete();
+    this.destroyed = true;
+    if (this.job) {
+      void this.job.stop();
+      this.schedulerRegistry.deleteCronJob(`tonListener_${this.instanceId}`);
+    }
   }
 
   protected getHandlerByPattern<T extends Array<Record<string, string>>>(route: string): Array<IDiscoveredHandler<T>> {
@@ -204,45 +212,78 @@ export class TonService {
     return methods.filter(method => method.meta.some(meta => transformPatternToRoute(meta) === route));
   }
 
-  protected async call(
-    pattern: Record<string, string>,
-    description: ILogEvent,
-    context: unknown,
-  ): Promise<Observable<any>> {
+  // Runs every handler of the event; true when all succeeded. A handler that throws (also synchronously) or rejects is
+  // logged and does not stop the others.
+  protected async call({ pattern, description, context }: IRoutedEvent): Promise<boolean> {
     const route = transformPatternToRoute(pattern);
     const handlers = this.getHandlerByPattern(route);
 
     if (!handlers.length) {
       this.loggerService.log(`Handler not found for: ${route}`, `${TonService.name}-${this.instanceId}`);
-      return EMPTY;
+      return true;
     }
 
     const results = await Promise.allSettled(
-      handlers.map(({ handler, instance }) => (handler.bind(instance) as MessageHandler)(description, context)),
+      handlers.map(({ handler, instance }) =>
+        Promise.resolve().then(() => (handler.bind(instance) as MessageHandler)(description, context)),
+      ),
     );
-    results.forEach(result => {
+    let ok = true;
+    for (const result of results) {
       if (result.status === "rejected") {
+        ok = false;
         this.loggerService.error(result.reason, `${TonService.name}-${this.instanceId}`);
       }
-    });
-    return from(["OK"]);
+    }
+    return ok;
   }
 
-  // The masterchain block and every shard block it commits that was not read yet. A masterchain block names only the
-  // newest block of each shard; the shard's earlier blocks since the last read one are taken by seqno. A shard seen
-  // for the first time (the first run, a split or a merge) contributes only its newest block.
-  private async blocksOf(seqno: number, shardSeqno: Map<string, number>): Promise<IBlockId[]> {
-    const { shards } = await this.api<{ shards: IBlockId[] }>("shards", { seqno });
-    const blocks: IBlockId[] = [{ workchain: -1, shard: MASTERCHAIN_SHARD, seqno }];
-    for (const shard of shards) {
-      const key = `${shard.workchain}:${shard.shard}`;
-      const lastRead = shardSeqno.get(key);
-      for (let n = lastRead === undefined ? shard.seqno : lastRead + 1; n <= shard.seqno; n++) {
-        blocks.push({ ...shard, seqno: n });
+  private hasHandler(pattern: Record<string, string>): boolean {
+    return this.getHandlerByPattern(transformPatternToRoute(pattern)).length > 0;
+  }
+
+  // The masterchain blocks fromSeqno..toSeqno and every shard block they commit, oldest first. A masterchain block names
+  // only the newest block of each shard; the shard blocks before it are found through their prev_blocks, back to the
+  // blocks the previous masterchain block named. This holds after a restart and across shard splits and merges.
+  private async blocksOf(fromSeqno: number, toSeqno: number): Promise<IBlockId[]> {
+    let committed = fromSeqno > 1 ? await this.shardTops(fromSeqno - 1) : new Set<string>();
+    const blocks: IBlockId[] = [];
+    for (let seqno = fromSeqno; seqno <= toSeqno; seqno++) {
+      blocks.push({ workchain: -1, shard: MASTERCHAIN_SHARD, seqno });
+      const { shards } = await this.api<{ shards: IBlockId[] }>("shards", { seqno });
+      for (const top of shards) {
+        blocks.push(...(await this.shardBlocksSince(top, committed)));
       }
-      shardSeqno.set(key, shard.seqno);
+      committed = new Set(shards.map(blockKey));
     }
     return blocks;
+  }
+
+  private async shardTops(seqno: number): Promise<Set<string>> {
+    const { shards } = await this.api<{ shards: IBlockId[] }>("shards", { seqno });
+    return new Set(shards.map(blockKey));
+  }
+
+  // `top` and the shard blocks before it that are not in `committed` (named by the previous masterchain block), oldest
+  // first. After a merge a block has two prev blocks; after a split two blocks share one.
+  private async shardBlocksSince(top: IBlockId, committed: Set<string>): Promise<IBlockId[]> {
+    const found = new Map<string, IBlockId>();
+    const queue = [top];
+    while (queue.length) {
+      const id = queue.pop()!;
+      const key = blockKey(id);
+      if (committed.has(key) || found.has(key) || id.seqno <= 0) {
+        continue;
+      }
+      found.set(key, id);
+      const { prev_blocks } = await this.api<{ prev_blocks: IBlockId[] }>("getBlockHeader", {
+        workchain: id.workchain,
+        shard: id.shard,
+        seqno: id.seqno,
+      });
+      queue.push(...prev_blocks);
+    }
+    return [...found.values()].sort((a, b) => a.seqno - b.seqno);
   }
 
   // All transactions of a block, page by page; a page continues after the (lt, account) of the previous page's last
@@ -281,53 +322,21 @@ export class TonService {
   }
 
   // A transaction of a watched account goes, as the event of its incoming message, to the handlers of the account's
-  // contractType. A transaction has one account, so a later pass (only new addresses) never delivers it again.
-  private route(tx: ITonTransaction, registry: IContractOptions[]): void {
+  // contractType
+  private route(tx: ITonTransaction, registry: IContractOptions[]): IRoutedEvent[] {
     const account = Address.parse(tx.address.account_address).toRawString();
     const entries = registry.filter(entry => entry.contractAddress.includes(account));
     if (!entries.length) {
-      return;
+      return [];
     }
     const event = parseMessage(tx.data);
     if (!event) {
-      return;
+      return [];
     }
-    for (const entry of entries) {
-      this.emit({
-        pattern: { contractType: entry.contractType, eventName: event.name },
-        description: event,
-        context: tx,
-      });
-    }
-  }
-
-  private async emitBlock(seqno: number): Promise<void> {
-    if (!this.getHandlerByPattern(transformPatternToRoute(blockPattern)).length) {
-      return;
-    }
-    const args: IBlockEvent = { seqno };
-    this.emit({ pattern: blockPattern, description: { name: BLOCK_EVENT, args }, context: args });
-    await this.drained();
-  }
-
-  private emit(event: IRoutedEvent): void {
-    this.pending++;
-    this.subject.next(event);
-  }
-
-  // an emitted event's handlers have finished
-  private settle(): void {
-    this.pending--;
-    if (!this.pending) {
-      this.drainWaiters.splice(0).forEach(resolve => resolve());
-    }
-  }
-
-  // resolves when the handlers of every emitted event have finished
-  private drained(): Promise<void> {
-    if (!this.pending) {
-      return Promise.resolve();
-    }
-    return new Promise<void>(resolve => this.drainWaiters.push(resolve));
+    return entries.map(entry => ({
+      pattern: { contractType: entry.contractType, eventName: event.name },
+      description: event,
+      context: tx,
+    }));
   }
 }

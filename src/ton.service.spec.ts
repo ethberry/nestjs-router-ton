@@ -172,15 +172,32 @@ describe("TonService on the local network", function () {
       ),
     ]);
 
-    await waitFor(() => received.of(ContractType.MERCHANT).length === 1);
+    // a spoofed notification: the same fields, sent by the main wallet instead of a jetton wallet
+    await sendFromWallet([
+      transfer(merchant, toNano("0.01"), false, transferNotification(5_000_000n, wallet, "order:4")),
+    ]);
 
-    const [notification] = received.of(ContractType.MERCHANT);
-    expect(notification.name).toEqual(TonEventType.TRANSFER_NOTIFICATION);
-    expect(notification.args.from).toEqual(jettonWalletAddress(merchant, minter.address).toRawString());
-    expect(notification.args.jettonAmount).toEqual(5_000_000n);
-    expect(notification.args.sender).toEqual(wallet.toRawString());
-    expect(notification.args.value).toEqual(toNano("0.01"));
-    expect(notification.args.comment).toEqual("order:4");
+    await waitFor(() => received.of(ContractType.MERCHANT).length === 2);
+
+    // the merchant's jetton wallet of this master, as the app checks it
+    const merchantJettonWallet = await reader.module
+      .get(TonService)
+      .getJettonWalletAddress(minter.address.toString(), merchant.toString());
+    // the spoofed one takes fewer hops and may come first
+    const notifications = received.of(ContractType.MERCHANT);
+    const real = notifications.find(n => n.args.from === merchantJettonWallet)!;
+    const spoofed = notifications.find(n => n.args.from !== merchantJettonWallet)!;
+    expect(merchantJettonWallet).toEqual(jettonWalletAddress(merchant, minter.address).toRawString());
+    expect(real.name).toEqual(TonEventType.TRANSFER_NOTIFICATION);
+    expect(real.args.from).toEqual(merchantJettonWallet);
+    expect(real.args.jettonAmount).toEqual(5_000_000n);
+    expect(real.args.sender).toEqual(wallet.toRawString());
+    expect(real.args.value).toEqual(toNano("0.01"));
+    expect(real.args.comment).toEqual("order:4");
+    // the spoofed one looks the same but for `from`: the check rejects it
+    expect(spoofed.name).toEqual(TonEventType.TRANSFER_NOTIFICATION);
+    expect(spoofed.args.comment).toEqual("order:4");
+    expect(spoofed.args.from).not.toEqual(merchantJettonWallet);
   });
 
   it("resumes after a restart from the saved cursor: nothing lost, nothing read twice", async function () {

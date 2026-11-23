@@ -6,7 +6,7 @@ import type { Type } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { Test } from "@nestjs/testing";
 import { EventPattern, Payload } from "@nestjs/microservices";
-import { CronExpression } from "@nestjs/schedule";
+import { CronExpression, SchedulerRegistry } from "@nestjs/schedule";
 import { Address, toNano } from "@ton/core";
 
 import { BLOCK_EVENT, TON_API, TonEventType } from "./ton.constants.js";
@@ -48,6 +48,9 @@ function fakeChain(head: number, blocks: Record<string, ITonTransaction[]>, shar
         const top = shardTop[Number(params.seqno)];
         return Promise.resolve({ shards: top === undefined ? [] : [{ workchain: 0, shard: SHARD, seqno: top }] });
       }
+      // one shard, never split: the block before a shard block is the previous seqno
+      case "getBlockHeader":
+        return Promise.resolve({ prev_blocks: [{ workchain: 0, shard: SHARD, seqno: Number(params.seqno) - 1 }] });
       case "getBlockTransactionsExt":
         return transactions(params);
       default:
@@ -111,12 +114,46 @@ class RegisteringController {
   }
 }
 
-// A handler of the merchant's transfers that always fails
+// A handler of the merchant's transfers that fails while `failing` is set: by a rejection, or by a synchronous throw
+@Injectable()
+class Failure {
+  public failing: "reject" | "throw" | null = "reject";
+}
+
 @Controller()
 class FailingController {
+  constructor(private readonly failure: Failure) {}
+
   @EventPattern({ contractType: ContractType.MERCHANT, eventName: TonEventType.TRANSFER })
   public merchant(): Promise<void> {
-    return Promise.reject(new Error("handler failed"));
+    if (this.failure.failing === "throw") {
+      throw new Error("handler threw");
+    }
+    return this.failure.failing === "reject" ? Promise.reject(new Error("handler failed")) : Promise.resolve();
+  }
+}
+
+// A block handler that fails, as a cursor save with the database down
+@Controller()
+class FailingBlockController {
+  @EventPattern({ eventName: BLOCK_EVENT })
+  public block(): Promise<void> {
+    return Promise.reject(new Error("cursor not saved"));
+  }
+}
+
+// The app shuts down while the first transfer is handled
+@Controller()
+class DestroyingController {
+  constructor(
+    private readonly tonService: TonService,
+    private readonly received: Received,
+  ) {}
+
+  @EventPattern({ contractType: ContractType.MERCHANT, eventName: TonEventType.TRANSFER })
+  public merchant(@Payload() event: ILogEvent<ITonMessage>): void {
+    this.received.log.push(`destroy at ${event.args.lt}`);
+    this.tonService.destroy();
   }
 }
 
@@ -131,7 +168,7 @@ async function reader(
       ConfigModule.forRoot({ ignoreEnvFile: true }),
       TonModule.register({ fromSeqno, chunkSize, debug: false, cron: CronExpression.EVERY_HOUR }),
     ],
-    providers: [Received],
+    providers: [Received, Failure],
     controllers,
   })
     .overrideProvider(TON_API)
@@ -140,7 +177,7 @@ async function reader(
   const logger = module.get(Logger);
   jest.spyOn(logger, "log").mockImplementation(() => undefined);
   const error = jest.spyOn(logger, "error").mockImplementation(() => undefined);
-  return { service: module.get(TonService), received: module.get(Received), error };
+  return { service: module.get(TonService), received: module.get(Received), error, module };
 }
 
 const m = short(MERCHANT.toRawString());
@@ -269,16 +306,74 @@ describe("TonService routing", function () {
     expect(received.log).toEqual([`MERCHANT Transfer ${m} 10`, "block 2", `MERCHANT Transfer ${m} 40`, "block 4"]);
   });
 
-  it("logs a failing handler and still runs the other handlers and moves the cursor", async function () {
+  it.each([
+    ["rejects", "reject"],
+    ["throws synchronously", "throw"],
+  ] as const)(
+    "a handler that %s: the others still run, the cursor stays, the next run delivers the range again",
+    async function (_how, failing) {
+      const chain = fakeChain(3, { "-1:2": [payment(MERCHANT, 10n)] });
+      const { service, received, error, module } = await reader(chain, [FailingController, NoBlockController]);
+      module.get(Failure).failing = failing;
+      service.updateRegistry({ contractType: ContractType.MERCHANT, contractAddress: [MERCHANT.toString()] });
+
+      const failed = await service.listen().catch((e: Error) => e.message);
+      const cursorAfterFailure = service.getLastProcessedSeqno();
+      // the handler recovers (the database is back): the same range is delivered again and the cursor moves
+      module.get(Failure).failing = null;
+      await service.listen();
+
+      expect(failed).toEqual("A handler failed in blocks 1..3: the range is read again on the next run");
+      expect(error).toHaveBeenCalledWith(
+        new Error(failing === "throw" ? "handler threw" : "handler failed"),
+        expect.any(String),
+      );
+      expect(cursorAfterFailure).toEqual(-1);
+      expect(received.log).toEqual([`MERCHANT Transfer ${m} 10`, `MERCHANT Transfer ${m} 10`]);
+      expect(service.getLastProcessedSeqno()).toEqual(3);
+    },
+  );
+
+  it("keeps the cursor when the block handler (the cursor save) fails", async function () {
     const chain = fakeChain(3, { "-1:2": [payment(MERCHANT, 10n)] });
-    const { service, received, error } = await reader(chain, [FailingController, NoBlockController]);
+    const { service } = await reader(chain, [NoBlockController, FailingBlockController]);
+    service.updateRegistry({ contractType: ContractType.MERCHANT, contractAddress: [MERCHANT.toString()] });
+
+    const failed = await service.listen().catch((e: Error) => e.message);
+
+    expect(failed).toEqual("The block handler failed for block 3: the range is read again on the next run");
+    expect(service.getLastProcessedSeqno()).toEqual(-1);
+  });
+
+  it("delivers nothing when the API fails in the middle of a range, and the whole range on the next run", async function () {
+    const chain = fakeChain(3, { "-1:1": [payment(MERCHANT, 10n)], "-1:3": [payment(MERCHANT, 30n)] });
+    // block 1 is read, block 2 fails (a 429 of a public API)
+    chain.transactions
+      .mockImplementationOnce(() => Promise.resolve({ incomplete: false, transactions: [payment(MERCHANT, 10n)] }))
+      .mockImplementationOnce(() => Promise.reject(new Error("429 Too Many Requests")));
+    const { service, received } = await reader(chain, [RecordingController]);
+    service.updateRegistry({ contractType: ContractType.MERCHANT, contractAddress: [MERCHANT.toString()] });
+
+    const failed = await service.listen().catch((e: Error) => e.message);
+    const deliveredAfterFailure = [...received.log];
+    await service.listen();
+
+    expect(failed).toEqual("429 Too Many Requests");
+    expect(deliveredAfterFailure).toEqual([]);
+    expect(received.log).toEqual([`MERCHANT Transfer ${m} 10`, `MERCHANT Transfer ${m} 30`, "block 3"]);
+  });
+
+  it("after destroy: the cron job is gone, a run stops before its next handler and keeps the cursor", async function () {
+    const chain = fakeChain(3, { "-1:1": [payment(MERCHANT, 10n)], "-1:3": [payment(MERCHANT, 30n)] });
+    const { service, received, module } = await reader(chain, [DestroyingController]);
+    service.init();
     service.updateRegistry({ contractType: ContractType.MERCHANT, contractAddress: [MERCHANT.toString()] });
 
     await service.listen();
 
-    expect(received.log).toEqual([`MERCHANT Transfer ${m} 10`]);
-    expect(error).toHaveBeenCalledWith(new Error("handler failed"), expect.any(String));
-    expect(service.getLastProcessedSeqno()).toEqual(3);
+    expect(received.log).toEqual(["destroy at 10"]);
+    expect(module.get(SchedulerRegistry).getCronJobs().size).toEqual(0);
+    expect(service.getLastProcessedSeqno()).toEqual(-1);
   });
 
   it("after a failed run reads the same range again, shard blocks included", async function () {

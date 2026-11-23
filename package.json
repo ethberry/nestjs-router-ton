@@ -7,11 +7,9 @@
   "bugs": {
     "url": "https://github.com/ethberry/nestjs-ton/issues"
   },
-  "dependencies": {
-    "cron": "4.4.0"
-  },
   "description": "TON block reader for NestJS: routes incoming messages to controllers",
   "devDependencies": {
+    "cron": "4.4.0",
     "@ethberry/cross-env": "0.0.5",
     "@ethberry/eslint-config": "5.0.13",
     "@jest/globals": "30.5.2",
@@ -41,9 +39,9 @@
   },
   "exports": {
     ".": {
-      "default": "./dist/index.js",
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "default": "./dist/index.js"
     }
   },
   "keywords": [],
@@ -52,6 +50,7 @@
   "name": "@ethberry/nestjs-ton",
   "type": "module",
   "peerDependencies": {
+    "cron": "^4.4.0",
     "@nestjs/common": "^12.5.0",
     "@nestjs/config": "^12.1.1",
     "@nestjs/core": "^12.5.0",

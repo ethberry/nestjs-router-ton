@@ -90,6 +90,23 @@ describe("parseMessage", function () {
     expect(event?.name).toEqual(TonEventType.EXCESSES);
   });
 
+  it.each([
+    // op 0 and 7 bits: not whole bytes of text
+    ["a cut comment", TonOpcode.COMMENT, beginCell().storeUint(TonOpcode.COMMENT, 32).storeUint(1, 7).endCell()],
+    // the opcode and 10 bits: no query id, amount or sender
+    [
+      "a notification without its fields",
+      TonOpcode.TRANSFER_NOTIFICATION,
+      beginCell().storeUint(TonOpcode.TRANSFER_NOTIFICATION, 32).storeUint(1, 10).endCell(),
+    ],
+  ])("reads %s as Message with its opcode instead of failing", function (_what, op, body) {
+    const event = parseMessage(incoming(body));
+
+    expect(event?.name).toEqual(TonEventType.MESSAGE);
+    expect(event?.args.op).toEqual(op);
+    expect(event?.args.value).toEqual(VALUE);
+  });
+
   it("reads any other opcode as Message with the opcode", function () {
     const event = parseMessage(incoming(beginCell().storeUint(OTHER_OP, 32).endCell()));
 
