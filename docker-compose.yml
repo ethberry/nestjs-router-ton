@@ -1,0 +1,56 @@
+# The local TON network of the tests. Container names and ports are the same as in other EthBerry stands: run one at a
+# time.
+services:
+  # The genesis validator of MyLocalTon (github.com/neodix42/mylocalton-docker), lite-server on 40004. Its
+  # global.config.json names the node by its address in the `ton` network, so both services keep fixed addresses.
+  ton:
+    container_name: ton
+    image: ghcr.io/neodix42/mylocalton-docker:v4.3.0
+    restart: "on-failure"
+    environment:
+      GENESIS: "true"
+      NAME: genesis
+    volumes:
+      - ton-shared:/usr/share/data
+      - ton-db:/var/ton-work/db
+    ports:
+      - "40004:40004" # lite-server
+    healthcheck:
+      test: /usr/local/bin/lite-client -a 127.0.0.1:40004 -p /var/ton-work/db/liteserver.pub -t 3 -c last
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0" # as upstream MyLocalTon
+    networks:
+      ton:
+        ipv4_address: 172.28.1.10
+
+  # TON Center HTTP API v2 over the lite-server (TON_API_URL), built by ton-api/Dockerfile
+  ton-api:
+    container_name: ton-api
+    build: ./ton-api
+    image: ethberry/ton-http-api-local:2.0.68
+    restart: "on-failure"
+    volumes:
+      - ton-shared:/usr/share/data:ro
+    ports:
+      - "8082:8081"
+    depends_on:
+      ton:
+        condition: service_healthy
+    networks:
+      ton:
+        ipv4_address: 172.28.1.105
+
+volumes:
+  ton-shared:
+  ton-db:
+
+networks:
+  ton:
+    ipam:
+      config:
+        - subnet: 172.28.1.0/24

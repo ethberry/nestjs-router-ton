@@ -1,0 +1,14 @@
+# Project
+dist/
+coverage/
+
+# IDE
+.idea
+.vscode
+
+# OS
+.DS_Store
+
+# NODE
+node_modules/
+npm-debug.log
