@@ -5,7 +5,7 @@
     "url": "https://ethberry.io/"
   },
   "bugs": {
-    "url": "https://github.com/ethberry/nestjs-ton/issues"
+    "url": "https://github.com/ethberry/nestjs-router-ton/issues"
   },
   "description": "TON block reader for NestJS: routes incoming messages to controllers",
   "devDependencies": {
@@ -47,7 +47,7 @@
   "keywords": [],
   "license": "UNLICENSED",
   "main": "./dist/index.js",
-  "name": "@ethberry/nestjs-ton",
+  "name": "@ethberry/nestjs-router-ton",
   "type": "module",
   "peerDependencies": {
     "cron": "^4.4.0",
@@ -66,7 +66,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ethberry/nestjs-ton.git"
+    "url": "git+https://github.com/ethberry/nestjs-router-ton.git"
   },
   "scripts": {
     "build": "tsc",

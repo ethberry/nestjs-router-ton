@@ -1,6 +1,6 @@
-# @ethberry/nestjs-ton
+# @ethberry/nestjs-router-ton
 
-Reads TON one masterchain block at a time, with its shard blocks, and hands the incoming messages of watched accounts to Nest controllers, the way `@ethberry/nestjs-viem` hands EVM logs.
+Reads TON one masterchain block at a time, with its shard blocks, and hands the incoming messages of watched accounts to Nest controllers, the way `@ethberry/nestjs-router-eth` hands EVM logs.
 
 ## Peers
 

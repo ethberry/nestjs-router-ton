@@ -1,6 +1,6 @@
 # Block reader
 
-`TonService` reads TON one masterchain block at a time, with every shard block it commits, and turns the incoming message of every transaction of a watched account into an event for Nest controllers (`@EventPattern({ contractType, eventName })`). It is the TON counterpart of `@ethberry/nestjs-viem`: the same module shape, registry and patterns.
+`TonService` reads TON one masterchain block at a time, with every shard block it commits, and turns the incoming message of every transaction of a watched account into an event for Nest controllers (`@EventPattern({ contractType, eventName })`). It is the TON counterpart of `@ethberry/nestjs-router-eth`: the same module shape, registry and patterns.
 
 ## Configuration
 
@@ -8,7 +8,7 @@
 - Module options (`ITonModuleOptions`, `TonModule.register` / `registerAsync`):
   - `fromSeqno`: the first masterchain block to read; the app passes its saved cursor + 1.
   - `chunkSize`: masterchain blocks per run, default 20 (one to two minutes of chain). It is also the most a failed run reads again.
-  - `cron`: how often a run starts. `debug` is accepted for parity with nestjs-viem.
+  - `cron`: how often a run starts. `debug` is accepted for parity with nestjs-router-eth.
 
 ## Cycle (`listen`)
 
