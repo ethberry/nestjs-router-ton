@@ -1,6 +1,6 @@
-# nestjs-ton
+# nestjs-router-ton
 
-`@ethberry/nestjs-ton`: a NestJS module that reads TON block by block and routes the incoming messages of watched accounts to controllers (`@EventPattern`), the way `@ethberry/nestjs-viem` routes EVM logs. A single package, not a monorepo.
+`@ethberry/nestjs-router-ton`: a NestJS module that reads TON block by block and routes the incoming messages of watched accounts to controllers (`@EventPattern`), the way `@ethberry/nestjs-router-eth` routes EVM logs. A single package, not a monorepo.
 
 ## Place in the package levels
 
