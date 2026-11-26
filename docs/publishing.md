@@ -32,4 +32,4 @@ Manual (local), from a clean checkout of `origin/main` with the network running 
 4. npmjs: `npm publish --access public` with a user config that maps `@ethberry` to npmjs and holds the token from the environment (never in a file of the repository).
 5. `git push && git push --tags`.
 
-CI: `ci-test.yml` (by hand: network, install, lint, build, test) and `manual.yml` (by hand: the release steps above to both registries, input `bump`). Secrets the release workflow reads: `GITHUBEMAIL`, `GITHUBTOKEN`, `GITHUBUSER`, `NPM_EMAIL`, `NPM_TOKEN`, `NPM_USER`.
+CI: `ci-test.yml` (by hand: network, install, lint, build, test) and `manual.yml` (by hand: the release steps above to both registries, input `bump`). `manual.yml` authenticates to GitHub Packages before `npm ci`: the lockfile resolves the `@ethberry` dev packages (`cross-env`, `eslint-config`) from GitHub Packages, which refuses an install without a token (401). Secrets the release workflow reads: `GITHUBEMAIL`, `GITHUBTOKEN`, `GITHUBUSER`, `NPM_EMAIL`, `NPM_TOKEN`, `NPM_USER`.
