@@ -10,14 +10,14 @@ import { CronJob } from "cron";
 
 import type { TonApi } from "./providers/api.js";
 import { parseMessage } from "./utils/parse-message.js";
-import { BLOCK_EVENT, TON_API } from "./ton.constants.js";
-import { MODULE_OPTIONS_TOKEN } from "./ton.module-definition.js";
+import { BLOCK_EVENT, TON_API } from "./ton-router.constants.js";
+import { MODULE_OPTIONS_TOKEN } from "./ton-router.module-definition.js";
 import type {
   IBlockEvent,
   IContractOptions,
   IDiscoveredHandler,
   ILogEvent,
-  ITonModuleOptions,
+  ITonRouterModuleOptions,
 } from "./interfaces/index.js";
 
 const blockPattern = { eventName: BLOCK_EVENT };
@@ -57,7 +57,7 @@ const MAX_SKIPPED_TICKS = 15;
 const blockKey = (id: IBlockId) => `${Number(id.workchain)}:${BigInt(id.shard)}:${Number(id.seqno)}`;
 
 @Injectable()
-export class TonService {
+export class TonRouterService {
   private instanceId = (Math.random() + 1).toString(36).substring(7);
   private job?: CronJob;
   private running = false;
@@ -79,7 +79,7 @@ export class TonService {
     protected readonly metadataScanner: MetadataScanner,
     protected readonly reflector: Reflector,
     @Inject(MODULE_OPTIONS_TOKEN)
-    protected options: ITonModuleOptions,
+    protected options: ITonRouterModuleOptions,
     protected schedulerRegistry: SchedulerRegistry,
   ) {}
 
@@ -105,7 +105,7 @@ export class TonService {
           this.skippedTicks = Math.min(2 ** this.failures - 1, MAX_SKIPPED_TICKS);
           this.loggerService.error(
             `Run failed ${this.failures} time(s) in a row, next try in ${this.skippedTicks + 1} tick(s): ${String(e)}`,
-            `${TonService.name}-${this.instanceId}`,
+            `${TonRouterService.name}-${this.instanceId}`,
           );
         },
       );
@@ -192,7 +192,7 @@ export class TonService {
 
     this.loggerService.log(
       `TON listener updated: ${contractAddress.join(", ")}`,
-      `${TonService.name}-${this.instanceId}`,
+      `${TonRouterService.name}-${this.instanceId}`,
     );
   }
 
@@ -266,7 +266,7 @@ export class TonService {
     const handlers = this.getHandlerByPattern(route);
 
     if (!handlers.length) {
-      this.loggerService.log(`Handler not found for: ${route}`, `${TonService.name}-${this.instanceId}`);
+      this.loggerService.log(`Handler not found for: ${route}`, `${TonRouterService.name}-${this.instanceId}`);
       return;
     }
 
@@ -277,7 +277,7 @@ export class TonService {
     );
     for (const result of results) {
       if (result.status === "rejected") {
-        this.loggerService.error(result.reason, `${TonService.name}-${this.instanceId}`);
+        this.loggerService.error(result.reason, `${TonRouterService.name}-${this.instanceId}`);
       }
     }
   }

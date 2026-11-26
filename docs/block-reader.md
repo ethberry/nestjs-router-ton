@@ -1,18 +1,18 @@
 # Block reader
 
-`TonService` reads TON one masterchain block at a time, with every shard block it commits, and turns the incoming message of every transaction of a watched account into an event for Nest controllers (`@EventPattern({ contractType, eventName })`). It is the TON counterpart of `@ethberry/nestjs-router-eth`: the same module shape, registry and patterns.
+`TonRouterService` reads TON one masterchain block at a time, with every shard block it commits, and turns the incoming message of every transaction of a watched account into an event for Nest controllers (`@EventPattern({ contractType, eventName })`). It is the TON counterpart of `@ethberry/nestjs-router-eth`: the same module shape, registry and patterns.
 
 ## Configuration
 
 - `TON_API_URL`, `TON_API_KEY` (env, through `ConfigService`): TON Center HTTP API v2 and its key. The `TON_API` provider (`TonApi`) sends GET requests with query params, and POST with a JSON body for `runGetMethod`; it returns `result` or throws the API's error.
-- Module options (`ITonModuleOptions`, `TonModule.register` / `registerAsync`):
+- Module options (`ITonRouterModuleOptions`, `TonRouterModule.register` / `registerAsync`):
   - `fromSeqno`: the first masterchain block to read; the app passes its saved cursor + 1.
   - `chunkSize`: masterchain blocks per run, default 20 (one to two minutes of chain). It is also the most a failed run reads again.
   - `cron`: how often a run starts. `debug` is accepted for parity with nestjs-router-eth.
 
 ## Cycle (`listen`)
 
-`init()` (from `TonModule.onModuleInit`) registers a cron job (`tonListener_<id>` in `SchedulerRegistry`). A tick starts `listen()`.
+`init()` (from `TonRouterModule.onModuleInit`) registers a cron job (`tonListener_<id>` in `SchedulerRegistry`). A tick starts `listen()`.
 
 - After a failed run (an API error) the next ticks are skipped, doubling: 1, 3, 7, up to 15 ticks, so after an API outage the reader tries again within 16 ticks. A tick that finds a run the app started itself still going does nothing and does not touch the count. A failing handler does not fail the run. Every failure is logged as an error with its count (`Run failed N time(s) in a row, next try in M tick(s): …`). A successful run resets the count.
 - `listen()` runs one range at a time: a call while a run is going (a cron tick, or the app calling it) returns at once.
@@ -37,7 +37,7 @@ An event can still come twice after a restart before the app saved the cursor (t
 
 ### Shutdown
 
-`destroy()` (from `TonModule.onModuleDestroy`) stops and removes the cron job. A run in progress stops before its next handler and does not move the cursor.
+`destroy()` (from `TonRouterModule.onModuleDestroy`) stops and removes the cron job. A run in progress stops before its next handler and does not move the cursor.
 
 ## Events (`parseMessage`)
 
@@ -72,10 +72,10 @@ TON has no logs: the "event" of a transaction is its incoming internal message. 
 
 ## Tests
 
-- `src/ton.service.spec.ts`, against the network of `docker-compose.yml` (MyLocalTon's main wallet sends):
+- `src/ton-router.service.spec.ts`, against the network of `docker-compose.yml` (MyLocalTon's main wallet sends):
   - one external message with a non-bounceable transfer with a comment, a hand-made `transfer_notification`, a message with an unknown opcode and a bounceable transfer to an uninitialized address: `Transfer`, `TransferNotification`, `Message` and `Bounce`, and no event for the address of the bounced transfer; the watched addresses are given in user-friendly and raw form;
   - a real jetton (the reference TEP-74 jetton in Tolk, code in `src/fixtures/jetton.ts`): deploy and mint, then a transfer with forward TON and a comment; `getJettonWalletAddress` returns the `from` of the real notification and not of a spoofed one with the same fields;
   - a restart: a second reader started from the cursor of the first one's block event gets the transfer sent while it was down, and not the one already handled.
-- `src/ton.blocks.spec.ts` (stubbed API): the shard blocks since the previous masterchain block after a restart, a split, a split of a parent that made another block first (that block read once), and a merge; a committed block given with a numeric shard still stops the walk; a block's second page continues after the first page's last transaction.
-- `src/ton.routing.spec.ts` (a fake chain: the API stubbed with transactions built by `src/fixtures/transactions.ts`): delivery, unwatched accounts, all address forms, several contract types, registry merge, an address registered by a handler mid-range, the block event and the cursor, an empty registry, a last block behind the cursor, `chunkSize`, a handler that rejects or throws (logged; the event's other handlers run, the cursor moves, nothing comes again), a failing block handler (logged, the cursor moves), an API error mid-range (nothing delivered, the whole range next time), a failed run that reads the same shard blocks again, transactions fetched once across passes, a second `listen()` during a run, the growing pause after failed runs (an API that is down), the jetton wallet asked once, `destroy` during a run.
+- `src/ton-router.blocks.spec.ts` (stubbed API): the shard blocks since the previous masterchain block after a restart, a split, a split of a parent that made another block first (that block read once), and a merge; a committed block given with a numeric shard still stops the walk; a block's second page continues after the first page's last transaction.
+- `src/ton-router.routing.spec.ts` (a fake chain: the API stubbed with transactions built by `src/fixtures/transactions.ts`): delivery, unwatched accounts, all address forms, several contract types, registry merge, an address registered by a handler mid-range, the block event and the cursor, an empty registry, a last block behind the cursor, `chunkSize`, a handler that rejects or throws (logged; the event's other handlers run, the cursor moves, nothing comes again), a failing block handler (logged, the cursor moves), an API error mid-range (nothing delivered, the whole range next time), a failed run that reads the same shard blocks again, transactions fetched once across passes, a second `listen()` during a run, the growing pause after failed runs (an API that is down), the jetton wallet asked once, `destroy` during a run.
 - `src/utils/parse-message.spec.ts`: each event kind from a built transaction, malformed bodies as `Message`, no event for an external or bounced-back message, a `Transfer` for coins that stayed on an uninitialized account.

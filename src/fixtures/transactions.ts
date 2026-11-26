@@ -3,7 +3,7 @@
 import { Address, beginCell, Cell, Dictionary, storeTransaction } from "@ton/core";
 import type { Message, Transaction, TransactionDescriptionGeneric } from "@ton/core";
 
-import type { ITonTransaction } from "../ton.service.js";
+import type { ITonTransaction } from "../ton-router.service.js";
 
 export interface IInternalMessage {
   from: Address;

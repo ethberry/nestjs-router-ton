@@ -1,6 +1,6 @@
 import { CronExpression } from "@nestjs/schedule";
 
-export interface ITonModuleOptions {
+export interface ITonRouterModuleOptions {
   // the first masterchain block to read; the app keeps the last processed one (the block event) and passes the next
   fromSeqno: number;
   // masterchain blocks per run

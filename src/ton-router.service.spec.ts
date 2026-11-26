@@ -7,10 +7,10 @@ import { EventPattern, Payload } from "@nestjs/microservices";
 import { CronExpression } from "@nestjs/schedule";
 import { beginCell, toNano } from "@ton/core";
 
-import { BLOCK_EVENT, TonEventType } from "./ton.constants.js";
+import { BLOCK_EVENT, TonEventType } from "./ton-router.constants.js";
 import type { IBlockEvent, ILogEvent, ITonMessage } from "./interfaces/index.js";
-import { TonModule } from "./ton.module.js";
-import { TonService } from "./ton.service.js";
+import { TonRouterModule } from "./ton-router.module.js";
+import { TonRouterService } from "./ton-router.service.js";
 import { jettonMinter, jettonWalletAddress, mintBody, transferBody } from "./fixtures/jetton.js";
 import {
   API_URL,
@@ -78,12 +78,12 @@ async function startReader(fromSeqno: number, watch: Partial<Record<ContractType
   const module = await Test.createTestingModule({
     imports: [
       ConfigModule.forRoot({ ignoreEnvFile: true, load: [() => ({ TON_API_URL: API_URL })] }),
-      TonModule.register({ fromSeqno, debug: true, cron: CronExpression.EVERY_SECOND }),
+      TonRouterModule.register({ fromSeqno, debug: true, cron: CronExpression.EVERY_SECOND }),
     ],
     providers: [Received],
     controllers: [TestController],
   }).compile();
-  const service = module.get(TonService);
+  const service = module.get(TonRouterService);
   for (const [contractType, contractAddress] of Object.entries(watch)) {
     service.updateRegistry({ contractType, contractAddress });
   }
@@ -91,7 +91,7 @@ async function startReader(fromSeqno: number, watch: Partial<Record<ContractType
   return { module, received: module.get(Received) };
 }
 
-describe("TonService on the local network", function () {
+describe("TonRouterService on the local network", function () {
   let module: TestingModule | undefined;
 
   afterEach(async function () {
@@ -181,7 +181,7 @@ describe("TonService on the local network", function () {
 
     // the merchant's jetton wallet of this master, as the app checks it
     const merchantJettonWallet = await reader.module
-      .get(TonService)
+      .get(TonRouterService)
       .getJettonWalletAddress(minter.address.toString(), merchant.toString());
     // the spoofed one takes fewer hops and may come first
     const notifications = received.of(ContractType.MERCHANT);

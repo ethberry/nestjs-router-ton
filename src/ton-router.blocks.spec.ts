@@ -8,9 +8,9 @@ import { Test } from "@nestjs/testing";
 import { CronExpression } from "@nestjs/schedule";
 import { Address } from "@ton/core";
 
-import { TON_API } from "./ton.constants.js";
-import { TonModule } from "./ton.module.js";
-import { TonService } from "./ton.service.js";
+import { TON_API } from "./ton-router.constants.js";
+import { TonRouterModule } from "./ton-router.module.js";
+import { TonRouterService } from "./ton-router.service.js";
 
 const ALL = "-9223372036854775808"; // the whole basechain
 const LEFT = "-4611686018427387904"; // its halves after a split
@@ -66,14 +66,14 @@ async function readFrom11(chain: ReturnType<typeof fakeApi>): Promise<string[]> 
   const module = await Test.createTestingModule({
     imports: [
       ConfigModule.forRoot({ ignoreEnvFile: true }),
-      TonModule.register({ fromSeqno: 11, debug: false, cron: CronExpression.EVERY_HOUR }),
+      TonRouterModule.register({ fromSeqno: 11, debug: false, cron: CronExpression.EVERY_HOUR }),
     ],
   })
     .overrideProvider(TON_API)
     .useValue(chain.api)
     .compile();
   jest.spyOn(module.get(Logger), "log").mockImplementation(() => undefined);
-  const service = module.get(TonService);
+  const service = module.get(TonRouterService);
   service.updateRegistry({ contractType: "WATCHED", contractAddress: [WATCHED.toString()] });
 
   await service.listen();
@@ -85,7 +85,7 @@ async function readFrom11(chain: ReturnType<typeof fakeApi>): Promise<string[]> 
   );
 }
 
-describe("TonService block walk", function () {
+describe("TonRouterService block walk", function () {
   it("after a restart reads every shard block since the previous masterchain block, and every page of a block", async function () {
     // masterchain block 10 named shard block 20, block 11 names 23: 21 and 22 are found through prev blocks
     const chain = fakeApi(

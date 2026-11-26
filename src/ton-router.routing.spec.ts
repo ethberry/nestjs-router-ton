@@ -1,4 +1,4 @@
-// The read cycle and routing of TonService on a fake chain: the API is stubbed with blocks built here, so each case
+// The read cycle and routing of TonRouterService on a fake chain: the API is stubbed with blocks built here, so each case
 // controls exactly which transactions are in which block.
 import { jest } from "@jest/globals";
 import { Controller, Injectable, Logger } from "@nestjs/common";
@@ -9,11 +9,11 @@ import { EventPattern, Payload } from "@nestjs/microservices";
 import { CronExpression, SchedulerRegistry } from "@nestjs/schedule";
 import { Address, beginCell, toNano } from "@ton/core";
 
-import { BLOCK_EVENT, TON_API, TonEventType } from "./ton.constants.js";
+import { BLOCK_EVENT, TON_API, TonEventType } from "./ton-router.constants.js";
 import type { IBlockEvent, ILogEvent, ITonMessage } from "./interfaces/index.js";
-import type { ITonTransaction } from "./ton.service.js";
-import { TonModule } from "./ton.module.js";
-import { TonService } from "./ton.service.js";
+import type { ITonTransaction } from "./ton-router.service.js";
+import { TonRouterModule } from "./ton-router.module.js";
+import { TonRouterService } from "./ton-router.service.js";
 import { blockTransaction, internalMessage } from "./fixtures/transactions.js";
 
 const SHARD = "-9223372036854775808";
@@ -118,7 +118,7 @@ class NoBlockController {
 // A merchant payment "deploys" a new address: the handler registers it, as a factory event handler does on EVM
 @Controller()
 class RegisteringController {
-  constructor(private readonly tonService: TonService) {}
+  constructor(private readonly tonService: TonRouterService) {}
 
   @EventPattern({ contractType: ContractType.MERCHANT, eventName: TonEventType.TRANSFER })
   public merchant(): void {
@@ -158,7 +158,7 @@ class FailingBlockController {
 @Controller()
 class DestroyingController {
   constructor(
-    private readonly tonService: TonService,
+    private readonly tonService: TonRouterService,
     private readonly received: Received,
   ) {}
 
@@ -178,7 +178,7 @@ async function reader(
   const module = await Test.createTestingModule({
     imports: [
       ConfigModule.forRoot({ ignoreEnvFile: true }),
-      TonModule.register({ fromSeqno, chunkSize, debug: false, cron: CronExpression.EVERY_HOUR }),
+      TonRouterModule.register({ fromSeqno, chunkSize, debug: false, cron: CronExpression.EVERY_HOUR }),
     ],
     providers: [Received, Failure],
     controllers,
@@ -189,13 +189,19 @@ async function reader(
   const logger = module.get(Logger);
   jest.spyOn(logger, "log").mockImplementation(() => undefined);
   const error = jest.spyOn(logger, "error").mockImplementation(() => undefined);
-  return { service: module.get(TonService), received: module.get(Received), error, module };
+  return { service: module.get(TonRouterService), received: module.get(Received), error, module };
 }
 
 const m = short(MERCHANT.toRawString());
 const d = short(DEPLOYED.toRawString());
 
-describe("TonService routing", function () {
+describe("TonRouterService routing", function () {
+  // amounts, logical times and seqnos are bigints: the reader must deliver them in an app that has not patched BigInt
+  // for JSON
+  it("runs without a BigInt JSON patch", function () {
+    expect("toJSON" in BigInt.prototype).toBe(false);
+  });
+
   it("delivers the incoming message of a watched account, then the block event with the range's last block", async function () {
     const chain = fakeChain(3, { "-1:2": [payment(MERCHANT, 10n)] });
     const { service, received } = await reader(chain, [RecordingController]);

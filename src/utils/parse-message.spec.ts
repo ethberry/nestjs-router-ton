@@ -1,6 +1,6 @@
 import { Address, beginCell, Cell, toNano } from "@ton/core";
 
-import { TonEventType, TonOpcode } from "../ton.constants.js";
+import { TonEventType, TonOpcode } from "../ton-router.constants.js";
 import { externalMessage, internalMessage, transactionBoc } from "../fixtures/transactions.js";
 import { parseMessage } from "./parse-message.js";
 

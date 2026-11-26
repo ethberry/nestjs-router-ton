@@ -1,7 +1,7 @@
 import { Cell, loadTransaction } from "@ton/core";
 import type { Slice } from "@ton/core";
 
-import { TonEventType, TonOpcode } from "../ton.constants.js";
+import { TonEventType, TonOpcode } from "../ton-router.constants.js";
 import type { ILogEvent, ITonMessage } from "../interfaces/index.js";
 
 // A text comment: op 0, then UTF-8 text (snake cells)

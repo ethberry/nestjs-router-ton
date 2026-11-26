@@ -1,6 +1,6 @@
 import { ConfigService } from "@nestjs/config";
 
-import { TON_API } from "../ton.constants.js";
+import { TON_API } from "../ton-router.constants.js";
 
 // A request to TON Center HTTP API v2 (`/<method>`): GET with `params` as the query, or POST with `body` as JSON
 // (runGetMethod); returns the response's `result` or throws its error
