@@ -14,7 +14,7 @@
 
 `init()` (from `TonModule.onModuleInit`) registers a cron job (`tonListener_<id>` in `SchedulerRegistry`). A tick starts `listen()`.
 
-- After a failed run the next ticks are skipped, doubling: 1, 3, 7, up to 15 ticks, so after an API outage the reader tries again within 16 ticks. A tick that finds a run the app started itself still going does nothing and does not touch the count. A handler that keeps failing on one event therefore does not re-read the range on every tick. Every failure is logged as an error with its count (`Run failed N time(s) in a row, next try in M tick(s): …`). A successful run resets the count.
+- After a failed run (an API error) the next ticks are skipped, doubling: 1, 3, 7, up to 15 ticks, so after an API outage the reader tries again within 16 ticks. A tick that finds a run the app started itself still going does nothing and does not touch the count. A failing handler does not fail the run. Every failure is logged as an error with its count (`Run failed N time(s) in a row, next try in M tick(s): …`). A successful run resets the count.
 - `listen()` runs one range at a time: a call while a run is going (a cron tick, or the app calling it) returns at once.
 
 1. Nothing happens while the registry is empty.
@@ -25,15 +25,15 @@
 6. The **whole range is read before any handler runs**. An API error in the middle of a range (a 429, a timeout) therefore delivers nothing; the next run reads the range again.
 7. The events go to the handlers **one at a time, in chain order**.
 8. Passes: a handler may register a new address (`updateRegistry`) while the range is handled. After all events of a pass, the range's blocks are read again for the addresses that appeared during it, until none appears. The new address gets its messages of the whole range. A transaction has one account, so a later pass never delivers it again.
-9. The **first failing handler stops the run**: the other handlers of that event still run, the later events wait. The run throws (`A handler failed in blocks a..b: the range is read again on the next run`); the cursor stays, and the next run delivers the range again from its start, so the order of events holds.
-10. Otherwise the `block` event (`{ eventName: "block" }`, args `{ seqno: to }`) goes to its handlers, if there are any. If it fails, the run throws and the cursor stays.
+9. A handler that throws (also synchronously) or rejects is **logged and skipped**: the other handlers of that event and the later events still run, and the event is not delivered again.
+10. Then the `block` event (`{ eventName: "block" }`, args `{ seqno: to }`) goes to its handlers, if there are any, after every message handler of the range has finished. A failing block handler is logged like any other.
 11. The cursor moves: `fromSeqno` becomes `to + 1`, `getLastProcessedSeqno()` returns `to` (−1 before the first range).
 
 ### Delivery guarantee
 
-At least once. A range is delivered again after a failed handler, a failed block handler, or a restart before the app saved the cursor. **Handlers must be idempotent by `lt` and `hash`** of the transaction. Nothing is lost: the cursor never moves past a range whose handlers did not all succeed.
+Each event is delivered once. The reader never moves past a range it could not read (an API error ends the run before any handler; the next run reads the range again), but it does not hold the cursor for a handler: a handler that fails is logged and its event is not delivered again. What to do with an event it could not handle (retry inside, an outbox, a dead-letter record) is the handler's business; `lt` and `hash` identify the transaction.
 
-A handler that always fails on one event (a poison event) stops the reader at that range: it is retried with the growing pause above and logged on every try, until the handler is fixed. So a handler must **not throw for a business rejection** (an unknown comment, a wrong amount, a spoofed notification): it records the rejection and returns. It throws only for a failure a retry can fix (the database is down).
+An event can still come twice after a restart before the app saved the cursor (the range since the last save is read again), so a handler that records payments keeps them unique by `lt` and `hash`.
 
 ### Shutdown
 
@@ -58,7 +58,7 @@ TON has no logs: the "event" of a transaction is its incoming internal message. 
 
 - The registry (`updateRegistry({ contractType, contractAddress })`) maps watched accounts to a contract type; addresses may be raw or user-friendly (bounceable, non-bounceable, testnet) and are stored raw, so all forms match. A second call for the same type merges.
 - The event goes to the handlers of `{ contractType, eventName }` for every contract type that watches the account. The second handler argument is the transaction as `getBlockTransactionsExt` returned it.
-- A handler that throws (also synchronously) or rejects is logged; the other handlers still run; the range is then retried (above). A pattern without a handler is logged.
+- A handler that throws (also synchronously) or rejects is logged; the other handlers and the later events still run (above). A pattern without a handler is logged.
 
 ## Account existence and bounce
 
@@ -77,5 +77,5 @@ TON has no logs: the "event" of a transaction is its incoming internal message. 
   - a real jetton (the reference TEP-74 jetton in Tolk, code in `src/fixtures/jetton.ts`): deploy and mint, then a transfer with forward TON and a comment; `getJettonWalletAddress` returns the `from` of the real notification and not of a spoofed one with the same fields;
   - a restart: a second reader started from the cursor of the first one's block event gets the transfer sent while it was down, and not the one already handled.
 - `src/ton.blocks.spec.ts` (stubbed API): the shard blocks since the previous masterchain block after a restart, a split, a split of a parent that made another block first (that block read once), and a merge; a committed block given with a numeric shard still stops the walk; a block's second page continues after the first page's last transaction.
-- `src/ton.routing.spec.ts` (a fake chain: the API stubbed with transactions built by `src/fixtures/transactions.ts`): delivery, unwatched accounts, all address forms, several contract types, registry merge, an address registered by a handler mid-range, the block event and the cursor, an empty registry, a last block behind the cursor, `chunkSize`, a handler that rejects or throws (the event's other handlers run, later events wait, cursor stays, the range comes again in order), a failing block handler, an API error mid-range (nothing delivered, the whole range next time), a failed run that reads the same shard blocks again, transactions fetched once across passes, a second `listen()` during a run, the growing pause after failed runs, the jetton wallet asked once, `destroy` during a run.
+- `src/ton.routing.spec.ts` (a fake chain: the API stubbed with transactions built by `src/fixtures/transactions.ts`): delivery, unwatched accounts, all address forms, several contract types, registry merge, an address registered by a handler mid-range, the block event and the cursor, an empty registry, a last block behind the cursor, `chunkSize`, a handler that rejects or throws (logged; the event's other handlers run, the cursor moves, nothing comes again), a failing block handler (logged, the cursor moves), an API error mid-range (nothing delivered, the whole range next time), a failed run that reads the same shard blocks again, transactions fetched once across passes, a second `listen()` during a run, the growing pause after failed runs (an API that is down), the jetton wallet asked once, `destroy` during a run.
 - `src/utils/parse-message.spec.ts`: each event kind from a built transaction, malformed bodies as `Message`, no event for an external or bounced-back message, a `Transfer` for coins that stayed on an uninitialized account.

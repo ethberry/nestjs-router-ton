@@ -117,9 +117,9 @@ export class TonService {
   // Reads the next masterchain blocks up to the last one, with every shard block they commit, and hands the incoming
   // message of every transaction of a watched account to the handlers, one at a time in chain order. A shard block
   // committed to a masterchain block is final. The whole range is read before any handler runs, so an API error
-  // delivers nothing. The first failing handler stops the run: it throws, the cursor stays, and the next run reads the
-  // same range again from its start, so the order holds and handlers must be idempotent (by lt and hash). Only one run
-  // at a time: a call while a run is going returns at once.
+  // delivers nothing and the next run reads the same range again. Each event is delivered once: a handler that fails is
+  // logged and the run goes on (what to do with an event it could not handle is the handler's business; lt and hash
+  // identify it). Only one run at a time: a call while a run is going returns at once.
   public async listen(): Promise<void> {
     if (this.running) {
       return;
@@ -159,11 +159,7 @@ export class TonService {
           if (this.destroyed) {
             return;
           }
-          if (!(await this.call(event))) {
-            throw new Error(
-              `A handler failed in blocks ${fromSeqno}..${toSeqno}: the range is read again on the next run`,
-            );
-          }
+          await this.call(event);
         }
         pass = this.notRead(read);
       }
@@ -173,8 +169,8 @@ export class TonService {
       }
       const args: IBlockEvent = { seqno: toSeqno };
       const blockEvent = { pattern: blockPattern, description: { name: BLOCK_EVENT, args }, context: args };
-      if (this.hasHandler(blockPattern) && !(await this.call(blockEvent))) {
-        throw new Error(`The block handler failed for block ${toSeqno}: the range is read again on the next run`);
+      if (this.hasHandler(blockPattern)) {
+        await this.call(blockEvent);
       }
       this.lastProcessedSeqno = toSeqno;
       this.options.fromSeqno = toSeqno + 1;
@@ -263,15 +259,15 @@ export class TonService {
     return methods.filter(method => method.meta.some(meta => transformPatternToRoute(meta) === route));
   }
 
-  // Runs every handler of the event; true when all succeeded. A handler that throws (also synchronously) or rejects is
-  // logged and does not stop the others.
-  protected async call({ pattern, description, context }: IRoutedEvent): Promise<boolean> {
+  // Runs every handler of the event. A handler that throws (also synchronously) or rejects is logged and does not stop
+  // the others or the run.
+  protected async call({ pattern, description, context }: IRoutedEvent): Promise<void> {
     const route = transformPatternToRoute(pattern);
     const handlers = this.getHandlerByPattern(route);
 
     if (!handlers.length) {
       this.loggerService.log(`Handler not found for: ${route}`, `${TonService.name}-${this.instanceId}`);
-      return true;
+      return;
     }
 
     const results = await Promise.allSettled(
@@ -279,14 +275,11 @@ export class TonService {
         Promise.resolve().then(() => (handler.bind(instance) as MessageHandler)(description, context)),
       ),
     );
-    let ok = true;
     for (const result of results) {
       if (result.status === "rejected") {
-        ok = false;
         this.loggerService.error(result.reason, `${TonService.name}-${this.instanceId}`);
       }
     }
-    return ok;
   }
 
   private hasHandler(pattern: Record<string, string>): boolean {
