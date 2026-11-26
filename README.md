@@ -8,22 +8,22 @@ Reads TON one masterchain block at a time, with its shard blocks, and hands the 
 
 ## Exports
 
-- `TonModule` (`register` / `registerAsync` with `ITonModuleOptions`), `TonService`.
-- `TonService`: `updateRegistry({ contractType, contractAddress })`, `getRegistry()`, `getLastProcessedSeqno()`, `getJettonWalletAddress(master, owner)`, `listen()` (one run; the cron calls it).
+- `TonRouterModule` (`register` / `registerAsync` with `ITonRouterModuleOptions`), `TonRouterService`.
+- `TonRouterService`: `updateRegistry({ contractType, contractAddress })`, `getRegistry()`, `getLastProcessedSeqno()`, `getJettonWalletAddress(master, owner)`, `listen()` (one run; the cron calls it).
 - `TonEventType` (`Transfer`, `TransferNotification`, `Excesses`, `Bounce`, `Message`), `TonOpcode`, `BLOCK_EVENT`, `TON_API` (the API provider token), `parseMessage(boc)`.
-- Types: `ITonMessage`, `IBlockEvent`, `ILogEvent`, `IContractOptions`, `ITonTransaction`, `ITonModuleOptions`, `TonApi`.
+- Types: `ITonMessage`, `IBlockEvent`, `ILogEvent`, `IContractOptions`, `ITonTransaction`, `ITonRouterModuleOptions`, `TonApi`.
 
 ## Configuration
 
 - `TON_API_URL`: TON Center HTTP API v2; `TON_API_KEY`: its key, if any.
-- Module options (`ITonModuleOptions`): `fromSeqno` (the masterchain block to start from), `chunkSize` (masterchain blocks per run, default 20; also the most a failed run reads again), `cron`, `debug`. After a failed run the next cron ticks are skipped, doubling up to 15.
+- Module options (`ITonRouterModuleOptions`): `fromSeqno` (the masterchain block to start from), `chunkSize` (masterchain blocks per run, default 20; also the most a failed run reads again), `cron`, `debug`. After a failed run the next cron ticks are skipped, doubling up to 15.
 
 ## Example
 
 ```ts
 @Module({
   imports: [
-    TonModule.registerAsync({
+    TonRouterModule.registerAsync({
       imports: [ConfigModule, SettingsModule],
       inject: [SettingsService],
       useFactory: async (settings: SettingsService) => ({
@@ -39,10 +39,10 @@ export class PaymentModule {}
 
 @Controller()
 export class PaymentController {
-  constructor(private readonly tonService: TonService, private readonly settings: SettingsService) {}
+  constructor(private readonly tonRouterService: TonRouterService, private readonly settings: SettingsService) {}
 
   public onModuleInit() {
-    this.tonService.updateRegistry({ contractType: "MERCHANT", contractAddress: [merchantAddress] });
+    this.tonRouterService.updateRegistry({ contractType: "MERCHANT", contractAddress: [merchantAddress] });
   }
 
   @EventPattern({ contractType: "MERCHANT", eventName: TonEventType.TRANSFER })
@@ -53,7 +53,7 @@ export class PaymentController {
   @EventPattern({ contractType: "MERCHANT", eventName: TonEventType.TRANSFER_NOTIFICATION })
   public async jetton(@Payload() event: ILogEvent<ITonMessage>) {
     // a real notification comes from the merchant's jetton wallet of a trusted master
-    const expected = await this.tonService.getJettonWalletAddress(usdtMaster, merchantAddress);
+    const expected = await this.tonRouterService.getJettonWalletAddress(usdtMaster, merchantAddress);
     if (event.args.from !== expected) {
       return; // spoofed
     }

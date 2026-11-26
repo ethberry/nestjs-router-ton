@@ -6,7 +6,7 @@ import { Address, beginCell, external, internal, storeMessage, storeMessageRelax
 import type { Cell, MessageRelaxed } from "@ton/core";
 import { getSecureRandomBytes, keyPairFromSeed, sign } from "@ton/crypto";
 
-import { TonOpcode } from "./ton.constants.js";
+import { TonOpcode } from "./ton-router.constants.js";
 
 export const API_URL = process.env.TON_API_URL ?? "http://localhost:8182";
 // MyLocalTon writes the keys of its genesis wallets into its shared folder; the tests read them from the container
