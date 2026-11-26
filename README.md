@@ -60,7 +60,7 @@ export class PaymentController {
     // event.args: { jettonAmount, sender, comment, ... }
   }
 
-  // after every handler of the range succeeded: save the cursor
+  // after every handler of the range has finished: save the cursor
   @EventPattern({ eventName: BLOCK_EVENT })
   public block(@Payload() event: ILogEvent<IBlockEvent>) {
     return this.settings.update("TON_SEQNO", String(event.args.seqno));
@@ -70,7 +70,7 @@ export class PaymentController {
 
 ## Writing handlers
 
-- **Idempotent by `lt` and `hash`.** Delivery is at least once: a range whose handlers did not all succeed (a handler threw or rejected, the cursor save failed) is delivered again on the next run, and so is the range after a restart before the cursor was saved.
+- **Each event once.** A handler that throws or rejects is logged and skipped; its event is not delivered again. Handle your own failures (retry inside the handler, an outbox). After a restart before the cursor was saved, the range since the last save comes again: record a payment once per `lt` and `hash`.
 - One event per incoming internal message of a watched account: `Transfer` (coins, with `comment` for op 0), `TransferNotification` (jettons: `jettonAmount`, `sender`, `comment` of the forward payload), `Excesses`, `Bounce`, `Message` (any other `op`, and any body that does not parse as its opcode says). Addresses in args are raw (`0:…`); register in any form.
 - A payment counts when its coins stayed on the account:
   - a message bounced back to its sender gives no event to the receiver; the sender gets `Bounce`;
@@ -78,7 +78,6 @@ export class PaymentController {
   - an external message (the account's own send) gives nothing.
 - `TransferNotification` can be sent by anyone: accept it only when `from` equals `getJettonWalletAddress(master, merchant)` for a master you trust (the reader asks the master once per owner and keeps the answer). A jetton transfer without `forward_ton_amount` sends no notification; it is seen only by watching the jetton wallet itself.
 - The second handler argument is the transaction as `getBlockTransactionsExt` returned it (`data` is its BOC).
-- A throwing handler does not stop the reader; it makes the range repeat until it succeeds. Throw only for a failure that a retry can fix (the database is down), not for a payment you reject.
-- Save the cursor in the `block` handler: it runs only after every handler of the range succeeded.
+- Save the cursor in the `block` handler: it runs after every handler of the range has finished.
 
 How it works, in full: [docs/block-reader.md](docs/block-reader.md).

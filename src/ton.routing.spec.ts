@@ -324,39 +324,37 @@ describe("TonService routing", function () {
     ["rejects", "reject"],
     ["throws synchronously", "throw"],
   ] as const)(
-    "a handler that %s: the others still run, the cursor stays, the next run delivers the range again",
+    "a handler that %s is logged; the others still run, the cursor moves, nothing comes again",
     async function (_how, failing) {
       const chain = fakeChain(3, { "-1:2": [payment(MERCHANT, 10n)] });
       const { service, received, error, module } = await reader(chain, [FailingController, NoBlockController]);
       module.get(Failure).failing = failing;
       service.updateRegistry({ contractType: ContractType.MERCHANT, contractAddress: [MERCHANT.toString()] });
 
-      const failed = await service.listen().catch((e: Error) => e.message);
-      const cursorAfterFailure = service.getLastProcessedSeqno();
-      // the handler recovers (the database is back): the same range is delivered again and the cursor moves
+      await service.listen();
+      const cursorAfterRun = service.getLastProcessedSeqno();
+      // the handler recovers: the range is not read again, its events are not delivered again
       module.get(Failure).failing = null;
       await service.listen();
 
-      expect(failed).toEqual("A handler failed in blocks 1..3: the range is read again on the next run");
       expect(error).toHaveBeenCalledWith(
         new Error(failing === "throw" ? "handler threw" : "handler failed"),
         expect.any(String),
       );
-      expect(cursorAfterFailure).toEqual(-1);
-      expect(received.log).toEqual([`MERCHANT Transfer ${m} 10`, `MERCHANT Transfer ${m} 10`]);
-      expect(service.getLastProcessedSeqno()).toEqual(3);
+      expect(cursorAfterRun).toEqual(3);
+      expect(received.log).toEqual([`MERCHANT Transfer ${m} 10`]);
     },
   );
 
-  it("keeps the cursor when the block handler (the cursor save) fails", async function () {
+  it("moves the cursor when the block handler fails, and logs it", async function () {
     const chain = fakeChain(3, { "-1:2": [payment(MERCHANT, 10n)] });
-    const { service } = await reader(chain, [NoBlockController, FailingBlockController]);
+    const { service, error } = await reader(chain, [NoBlockController, FailingBlockController]);
     service.updateRegistry({ contractType: ContractType.MERCHANT, contractAddress: [MERCHANT.toString()] });
 
-    const failed = await service.listen().catch((e: Error) => e.message);
+    await service.listen();
 
-    expect(failed).toEqual("The block handler failed for block 3: the range is read again on the next run");
-    expect(service.getLastProcessedSeqno()).toEqual(-1);
+    expect(error).toHaveBeenCalledWith(new Error("cursor not saved"), expect.any(String));
+    expect(service.getLastProcessedSeqno()).toEqual(3);
   });
 
   it("delivers nothing when the API fails in the middle of a range, and the whole range on the next run", async function () {
@@ -390,7 +388,9 @@ describe("TonService routing", function () {
 
   it("after failed runs skips the next ticks, doubling the pause, and logs every failure", async function () {
     const chain = fakeChain(3, { "-1:2": [payment(MERCHANT, 10n)] });
-    const { service, error, module } = await reader(chain, [FailingController]);
+    // the API is down: every run fails on the last masterchain block
+    chain.masterchainInfo.mockImplementation(() => Promise.reject(new Error("API down")));
+    const { service, error, module } = await reader(chain, [RecordingController]);
     service.updateRegistry({ contractType: ContractType.MERCHANT, contractAddress: [MERCHANT.toString()] });
     service.init();
     const job = [...module.get(SchedulerRegistry).getCronJobs().values()][0];
