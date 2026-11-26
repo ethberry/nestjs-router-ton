@@ -25,12 +25,7 @@ jobs:
         with:
           node-version: "26.x"
 
-      - name: Install Packages npm i
-        run: npm i
-
-      - name: Build Packages
-        run: npm run build
-
+      # before the install: the lockfile resolves @ethberry dev packages from GitHub Packages
       - name: Authenticate GitHub Packages & Configure Git User
         run: |
           echo "@ethberry:registry=https://npm.pkg.github.com/" >> .npmrc
@@ -46,6 +41,12 @@ jobs:
 
       - name: Authenticate GitHub Packages via npm
         run: npm whoami --registry=https://npm.pkg.github.com/
+
+      - name: Install Packages npm ci
+        run: npm ci
+
+      - name: Build Packages
+        run: npm run build
 
       - name: Version by NPM
 
