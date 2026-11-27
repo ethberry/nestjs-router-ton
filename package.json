@@ -11,7 +11,7 @@
   "devDependencies": {
     "cron": "4.4.0",
     "@ethberry/cross-env": "0.0.5",
-    "@ethberry/eslint-config": "5.0.13",
+    "@ethberry/eslint-config": "5.0.14",
     "@jest/globals": "30.5.2",
     "@nestjs/common": "12.5.0",
     "@nestjs/config": "12.1.1",
