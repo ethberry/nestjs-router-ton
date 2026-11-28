@@ -11,7 +11,16 @@
 7. **Document** — knowledge notes, ADRs, `AGENTS.md` and package READMEs (`documentation` rule).
 8. **Report** — what changed, the checks run with their outcome, what is left, and every question to the user that is still unanswered (from the repository's `docs/questions.md`, asked again). Follow-ups go to the plan file, not into code. Before the turn ends, the repository's `docs/now.md` is rewritten and its other three session files are brought up to date (`documentation` rule, "The plan file").
 
-Problems noticed outside the task's scope are not fixed silently and not dropped: report them and add them to the plan file. A question to the user is not dropped either when it stays unanswered (missed, scrolled away, cannot be answered yet): it goes into the repository's `docs/questions.md` with its date and is asked again (`documentation` rule, "The plan file").
+Problems noticed outside the task's scope are not fixed silently and not dropped: report them and add them to the plan file (a bug goes to an issue, see "Bugs are GitHub issues"). A question to the user is not dropped either when it stays unanswered (missed, scrolled away, cannot be answered yet): it goes into the repository's `docs/questions.md` with its date and is asked again (`documentation` rule, "The plan file").
+
+## Bugs are GitHub issues
+
+The user's decision (2026-11-28): every known bug is a GitHub issue in the repository that owns the fix. The Coordinator keeps the order of all of them in agent-kit `docs/bugs.md`; there is no Projects board.
+
+- A bug found in your own repository: open the issue there (`gh issue create`, label `bug`; add `security` or `needs-decision` when it applies) and send its number to the Coordinator. A bug in another repository goes to the Coordinator, who opens it at the owner.
+- A security bug never goes into the issues of a public repository (`nestjs-router-eth`, `ethberry.github.io` and the other public ones): send it to the Coordinator, who keeps it in a private repository or a security advisory.
+- The PR that fixes it says `Fixes ethberry/<repo>#<n>` (or `Fixes #<n>` in the same repository), so the merge closes it. A group issue with a checklist is ticked item by item and closed by the PR that ends it.
+- The plan file points to the issue instead of repeating its text. Opening an issue is not a go to fix it: the usual rules on who decides still apply.
 
 ## CI minutes
 
@@ -68,14 +77,26 @@ The user's rule (2026-11-19): fixing happens many times, releasing happens once.
 - Never release after a single small fix while other planned changes for the same package are still open. If a lower package must be published for a higher one to build, finish every change planned for that lower package first, then publish it once.
 - Before any release, list what is still planned for each repository of the batch; if anything is open, do it first.
 - A release is never a step to offer in the middle of work; it is the last step.
+- **No major version without the user (hard rule, the user's decision 2026-11-28, every published package of the organisation).** Releases are minors and patches only; a breaking change is a minor. A major only for a real necessity (such as renaming a package) and only with the user's explicit yes for that release in your own chat. Every release names its bump explicitly (`minor` / `patch`, never the default or conventional-commits bump, which turns `feat!:` into a major), and the planned versions are read before publishing: a major in them stops the release.
 
 ## Sessions
 
-One agent session owns each area: **Packages** (every `@ethberry/*` package), **Framework** (the `framework` app, the main consumer), **Contracts** (repositories `contracts-<network>` — what the framework deploys, e.g. `ethberry/contracts-evm` with the package `@ethberry/framework-contracts` — and `library-<network>` — the building blocks, e.g. `ethberry/library-evm` with the packages `@ethberry/contracts-*`; a session of its own per network: EVM, Tron, Solana, TON), **Review** (coordination, review, order of work, the `framework` docs). The user decides finally.
+One agent session owns each area. The user decides finally.
 
-- An area is changed only by its owner; another session writes to Review what it needs and why. Anything another side consumes (a package API, an ABI, EIP-712 types, an artifact path) is agreed with the consumer before it is implemented.
-- Review's ok counts as the user's for commits, pushes, merges and branches; those questions never go to the user. Product, data, credential and destructive decisions do.
+| Session | Owns |
+|---|---|
+| **Coordinator** | relaying between sessions, the order of work, the organisation's bug list (agent-kit `docs/bugs.md`), agent-kit itself |
+| **Packages** | the `@ethberry/*` package monorepos (common, license, mui, nestjs and their `-eth` repos), `nestjs-sqs`, `mui-lexical`, `eslint-config` |
+| **Framework** | the `framework` app, the main consumer, and its dev and e2e stands |
+| **Contracts** | contract coordination; a session of its own per network — **EVM** (`contracts-evm` with `@ethberry/framework-contracts`, `library-evm` with `@ethberry/contracts-*`), **Tron**, **Solana**, **TON** |
+| **Chain readers** | `nestjs-router-eth`, `nestjs-router-solana`, `nestjs-router-ton` |
+| **Portal** | `portal` |
+| **Docs** | the documentation site (`framework-docs`, formerly `ethberry.github.io`) |
+
+- An area is changed only by its owner. Every other session reads other repositories freely and never writes to them: what another side must do goes to the Coordinator, who relays it to the owner. Anything another side consumes (a package API, an ABI, EIP-712 types, an artifact path) is agreed with the consumer through the Coordinator before it is implemented.
+- The Coordinator's ok counts as the user's for commits, pushes, merges and branches; those questions never go to the user. Product, data, credential, release-of-a-major and destructive decisions do, and a decision relayed by another session is never the user's approval: it is confirmed in your own chat.
 - A shared checkout, its `node_modules` and a running stand are touched only with the ok of the session they belong to.
+- The shared rules come from agent-kit (`node agent-kit/sync.mjs <repo>` renders them into `.claude/rules/`); they are never edited in the repository. When the Coordinator announces a kit change, each owner commits the synced files of its repositories on a branch (`chore: sync agent-kit rules [skip ci]`) and merges it; a file the sync holds is resolved, not left behind.
 
 ## Definition of Done
 
@@ -83,7 +104,7 @@ One agent session owns each area: **Packages** (every `@ethberry/*` package), **
 - Lint, typecheck/build and the relevant tests were **run** and **passed** in this session, with the command named in the report.
 - No new lint suppressions, `any`, double casts (`as unknown as`), `@ts-ignore`, skipped or focused tests, or raised timeouts introduced to get green.
 - KISS / DRY / YAGNI pass done.
-- Public interfaces (package exports, HTTP contracts, ABIs, events, DTOs, migrations) are backward compatible, or the break is a major version and is stated in the report and the changelog.
+- Public interfaces (package exports, HTTP contracts, ABIs, events, DTOs, migrations) are backward compatible, or the break is stated in the report and the changelog and released as a minor (a major only with the user's yes, `packages` rule).
 - Documentation updated.
 
 ## Reporting
@@ -93,11 +114,12 @@ Keep three statements apart: **test written**, **test run**, **test passed**. "V
 ## Git
 
 - Never write code on the base branch or on someone else's branch. Check `git branch --show-current` right before every commit and push; if it is not the task's branch, stop.
-- Commit messages follow conventional commits (`fix:`, `feat:`, `feat!:` / `BREAKING CHANGE:` for a major, `chore:`, `docs:`, `test:`), one logical change per commit.
+- Commit messages follow conventional commits (`fix:`, `feat:`, `feat!:` / `BREAKING CHANGE:` for a breaking change, which still releases as a minor, `chore:`, `docs:`, `test:`), one logical change per commit.
 - A pull request targets the base branch. Its description says what changes and why, how it was verified (commands and results), and what is not verified.
 - Do not force-push shared branches and do not rewrite pushed history. Tags are not deleted without the user's yes.
 - Pull requests are merged with **squash** (one commit per PR on the base branch).
 - Work in the repository's main checkout on a task branch: no git worktrees, temporary clones or side checkouts. Uncommitted changes found there are shown to the user, not routed around.
 - Before merging in a monorepo, run the root test command (all projects) and name the project count in the PR.
-- After a merge, delete the task branch locally; the remote branch is deleted by Review, from a checked list (repository, branch, merged PR, unique commits). A squash-merged branch is not an ancestor of the base branch, so `git branch -d` and "is it merged?" checks by commits say no: check by the pull request instead (`gh pr list --state merged --head <branch>`), then `git push origin --delete <branch>` and `git branch -D <branch>`. A branch with unmerged work that is still wanted stays.
+- After a merge, delete the task branch locally; the remote branch is deleted by the repository's owner session after checking it (repository, branch, merged PR, unique commits). A squash-merged branch is not an ancestor of the base branch, so `git branch -d` and "is it merged?" checks by commits say no: check by the pull request instead (`gh pr list --state merged --head <branch>`), then `git push origin --delete <branch>` and `git branch -D <branch>`. A branch with unmerged work that is still wanted stays.
 - Uncommitted changes of another session in a shared checkout are not yours: do not stash, reset or commit them.
+- Git talks to GitHub only over SSH (`git@github.com:…`): remotes, clones, `git ls-remote`, git dependencies. Never an `https://github.com/…` git URL, a token in a URL, or a credential helper or keychain; a git prompt for a GitHub username or password means an HTTPS URL slipped in, so fix the URL instead of answering it. `gh` keeps `git_protocol ssh`; its API calls use its own token.
